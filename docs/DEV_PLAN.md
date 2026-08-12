@@ -32,7 +32,8 @@ C端（手机 App，Kotlin）                         B端（AstrBot 插件，Py
 ### M2 B 端插件骨架（第 2 周）
 - [ ] `astrbot_plugin_fairy_voice/`：metadata.yaml + _conf_schema.json（ws_port / auth_token / heartbeat_timeout）
 - [ ] aiohttp WS 服务端：连接管理、token 校验、心跳超时清理（参考 cherry-astrbot/ws_server.py）
-- [ ] 核心：收到 ask → 按 device_id 绑定独立会话（conversation_manager），用户消息写入历史 → `llm_generate(contexts=历史)` 带上下文生成 → 回复 `add_message_pair` 回写，上下文自然累积（等同普通聊天）
+- [ ] 核心：收到 ask → 按 device_id 维护内存会话（见记忆策略实现），`llm_generate(contexts=recent)` 带上下文生成 → 回复回写 recent
+- [ ] 记忆策略：仅保留最近 3 轮；超 3 轮且 5 分钟内再对话 → LLM 摘要压缩旧记忆注入 system_prompt；超 5 分钟未对话 → 清空记忆重开
 - [ ] 进阶：`tool_loop_agent` 支持工具调用（后续可挂 mihome/远程电脑等工具）
 - [ ] 命令：`/fairy` 查看在线设备与状态
 
@@ -46,7 +47,7 @@ C端（手机 App，Kotlin）                         B端（AstrBot 插件，Py
 ### M4 语音闭环（第 4 周）
 - [ ] 录音 + SpeechRecognizer（系统识别，离线可用，按需申请权限）
 - [ ] 完整链路：按下 → 录音 → 识别 → WS 发送 → AI 回复 → TTS 播报
-- [ ] 不做录音连续问答 UI（按一次答一次），但 AI 侧保留上下文记忆（复用 AstrBot 会话历史，等同普通聊天）
+- [ ] 不做录音连续问答 UI（按一次答一次），但 AI 侧保留 3 轮内上下文记忆（超出按记忆策略压缩/抛弃）
 - [ ] 状态机：空闲/录音中/识别中/等待AI/播报中，悬浮窗显示状态
 - [ ] 唤醒词预留：后续可在录音链路前加轻量唤醒（可选项）
 
@@ -75,12 +76,38 @@ resp = await self.context.tool_loop_agent(
 
 > 注意：WS 请求没有真实 `event`，需要构造最小 event 或使用插件默认会话的 umo 获取 provider_id；M2 阶段验证此路径。
 
+## 记忆策略实现（B 端，按 device_id 维护内存会话）
+
+```python
+# session = {"summary": None, "recent": [], "last_active": 0}
+# recent 为最近 <=3 轮消息（1 轮 = user+assistant 2 条）
+if now - session["last_active"] > 300:      # 超 5 分钟 → 抛弃记忆
+    session = {"summary": None, "recent": [], "last_active": now}
+
+session["recent"].append({"role": "user", "content": text})
+
+# 超出 3 轮 → 把最早 1 轮压缩进 summary（LLM 摘要）
+if len(session["recent"]) > 6:
+    old = session["recent"][:2]
+    session["summary"] = await llm_generate(prompt=f"把以下对话压缩成要点摘要：{old}")
+    session["recent"] = session["recent"][2:]
+
+resp = await llm_generate(
+    chat_provider_id=... ,
+    system_prompt=session["summary"],  # 压缩记忆注入
+    contexts=session["recent"],         # 最近 3 轮原文
+)
+session["recent"].append({"role": "assistant", "content": resp.completion_text})
+session["last_active"] = now
+```
+
 ## 验收标准
 
 - 手机按按钮 → 3 秒内开始录音，识别文本 3 秒内返回
 - WS 断线 15 秒内自动重连，重连后状态同步
 - AI 回复从发送到 TTS 播报 < 10 秒（视模型速度）
 - 后台挂机 24 小时耗电 < 2%
+- 超 5 分钟未对话后再次指令，AI 无上一段记忆（验证抛弃逻辑）
 - token 错误握手即断，无明文存储
 
 ## 参考
