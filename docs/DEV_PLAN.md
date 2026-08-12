@@ -34,7 +34,7 @@ C端（手机 App，Kotlin）                         B端（AstrBot 插件，Py
 - [x] aiohttp WS 服务端：连接管理、token 校验、心跳超时清理（参考 cherry-astrbot/ws_server.py）
 - [x] 核心：收到 ask → 按 device_id 维护内存会话（见记忆策略实现），`llm_generate(contexts=recent)` 带上下文生成 → 回复回写 recent
 - [x] 记忆策略：仅保留最近 3 轮；超 3 轮且 5 分钟内再对话 → LLM 摘要压缩旧记忆注入 system_prompt；超 5 分钟未对话 → 清空记忆重开
-- [ ] 进阶：`tool_loop_agent` 支持工具调用（后续可挂 mihome/远程电脑等工具）
+- [x] 进阶：`tool_loop_agent` 工具调用（伪造最小 event，enable_tools 配置开启，默认关，待实机验证）
 - [x] 命令：`/fairy` 查看在线设备与状态
 
 ### M3 C 端 App 骨架（第 3 周）
@@ -74,7 +74,7 @@ resp = await self.context.tool_loop_agent(
 )
 ```
 
-> 注意：WS 请求没有真实 `event`，需要构造最小 event 或使用插件默认会话的 umo 获取 provider_id；M2 阶段验证此路径。
+> 已确认（M2 源码验证）：WS 请求无真实 event，但 `AstrMessageEvent`（ABC 无抽象方法）、`AstrBotMessage()`、`PlatformMetadata(name,desc,id)` 均可无平台构造，插件内伪造最小 event 即可调用 `tool_loop_agent` 完整工具循环；umo = fairy_voice:friend:{device_id}，工具注册表全局共享。
 
 ## 记忆策略实现（B 端，按 device_id 维护内存会话）
 

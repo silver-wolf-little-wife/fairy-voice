@@ -28,5 +28,17 @@
     "description": "保留的最近对话轮数，超出后最早轮次压缩为摘要",
     "default": 3,
     "hint": "默认 3 轮"
+  },
+  "enable_tools": {
+    "type": "bool",
+    "description": "启用工具调用（tool_loop_agent）。通过伪造最小 event 实现，工具注册表全局共享",
+    "default": false,
+    "hint": "实机验证 AstrBot 环境后建议开启"
+  },
+  "tool_max_steps": {
+    "type": "int",
+    "description": "工具循环最大步数",
+    "default": 10,
+    "hint": "防止工具循环失控"
   }
 }
