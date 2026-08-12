@@ -32,7 +32,7 @@ C端（手机 App，Kotlin）                         B端（AstrBot 插件，Py
 ### M2 B 端插件骨架（第 2 周）
 - [ ] `astrbot_plugin_fairy_voice/`：metadata.yaml + _conf_schema.json（ws_port / auth_token / heartbeat_timeout）
 - [ ] aiohttp WS 服务端：连接管理、token 校验、心跳超时清理（参考 cherry-astrbot/ws_server.py）
-- [ ] 核心：收到 ask → `context.get_current_chat_provider_id(umo)` → `context.llm_generate(prompt=text)` → 回传 `completion_text`
+- [ ] 核心：收到 ask → 按 device_id 绑定独立会话（conversation_manager），用户消息写入历史 → `llm_generate(contexts=历史)` 带上下文生成 → 回复 `add_message_pair` 回写，上下文自然累积（等同普通聊天）
 - [ ] 进阶：`tool_loop_agent` 支持工具调用（后续可挂 mihome/远程电脑等工具）
 - [ ] 命令：`/fairy` 查看在线设备与状态
 
@@ -46,7 +46,7 @@ C端（手机 App，Kotlin）                         B端（AstrBot 插件，Py
 ### M4 语音闭环（第 4 周）
 - [ ] 录音 + SpeechRecognizer（系统识别，离线可用，按需申请权限）
 - [ ] 完整链路：按下 → 录音 → 识别 → WS 发送 → AI 回复 → TTS 播报
-- [ ] 明确不做连续对话模式，保持单次指令（按一次答一次）
+- [ ] 不做录音连续问答 UI（按一次答一次），但 AI 侧保留上下文记忆（复用 AstrBot 会话历史，等同普通聊天）
 - [ ] 状态机：空闲/录音中/识别中/等待AI/播报中，悬浮窗显示状态
 - [ ] 唤醒词预留：后续可在录音链路前加轻量唤醒（可选项）
 
