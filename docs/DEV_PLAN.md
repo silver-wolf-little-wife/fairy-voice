@@ -25,17 +25,17 @@ C端（手机 App，Kotlin）                         B端（AstrBot 插件，Py
 ## 里程碑
 
 ### M1 协议定稿（第 1 周）
-- [ ] 设计 fairy-voice 协议 v1.0.0：hello 握手（token + device_id）、心跳、ask 请求/响应
-- [ ] 帧格式：`{"type":"ask","id":...,"text":"...","lang":"zh-CN"}` → `{"type":"response","id":...,"ok":true,"data":{"text":"AI回复","audio_hint":true}}`
-- [ ] 文档写入 docs/PROTOCOL.md，双端同步
+- [x] 设计 fairy-voice 协议 v1.0.0：hello 握手（token + device_id）、心跳、ask 请求/响应
+- [x] 帧格式：`{"type":"ask","id":...,"text":"...","lang":"zh-CN"}` → `{"type":"response","id":...,"ok":true,"data":{"text":"AI回复","audio_hint":true}}`
+- [x] 文档写入 docs/PROTOCOL.md，双端同步
 
 ### M2 B 端插件骨架（第 2 周）
-- [ ] `astrbot_plugin_fairy_voice/`：metadata.yaml + _conf_schema.json（ws_port / auth_token / heartbeat_timeout）
-- [ ] aiohttp WS 服务端：连接管理、token 校验、心跳超时清理（参考 cherry-astrbot/ws_server.py）
-- [ ] 核心：收到 ask → 按 device_id 维护内存会话（见记忆策略实现），`llm_generate(contexts=recent)` 带上下文生成 → 回复回写 recent
-- [ ] 记忆策略：仅保留最近 3 轮；超 3 轮且 5 分钟内再对话 → LLM 摘要压缩旧记忆注入 system_prompt；超 5 分钟未对话 → 清空记忆重开
+- [x] `astrbot_plugin_fairy_voice/`：metadata.yaml + _conf_schema.json（ws_port / auth_token / heartbeat_timeout）
+- [x] aiohttp WS 服务端：连接管理、token 校验、心跳超时清理（参考 cherry-astrbot/ws_server.py）
+- [x] 核心：收到 ask → 按 device_id 维护内存会话（见记忆策略实现），`llm_generate(contexts=recent)` 带上下文生成 → 回复回写 recent
+- [x] 记忆策略：仅保留最近 3 轮；超 3 轮且 5 分钟内再对话 → LLM 摘要压缩旧记忆注入 system_prompt；超 5 分钟未对话 → 清空记忆重开
 - [ ] 进阶：`tool_loop_agent` 支持工具调用（后续可挂 mihome/远程电脑等工具）
-- [ ] 命令：`/fairy` 查看在线设备与状态
+- [x] 命令：`/fairy` 查看在线设备与状态
 
 ### M3 C 端 App 骨架（第 3 周）
 - [ ] Android 工程（Kotlin + Compose，minSdk 26）

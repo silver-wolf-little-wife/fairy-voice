@@ -1,0 +1,32 @@
+{
+  "ws_port": {
+    "type": "int",
+    "description": "WebSocket 服务端口",
+    "default": 8766,
+    "hint": "C 端 fairy-voice-app 将连接到此端口"
+  },
+  "auth_token": {
+    "type": "string",
+    "description": "认证 token（C 端 App 必须配置相同值）",
+    "default": "change-me",
+    "hint": "建议使用强随机字符串"
+  },
+  "heartbeat_timeout": {
+    "type": "int",
+    "description": "心跳超时（秒），超过未收到设备任何帧则判定掉线并清理记忆",
+    "default": 60,
+    "hint": "建议大于 App 端 heartbeat_interval（默认 15s）"
+  },
+  "memory_ttl": {
+    "type": "int",
+    "description": "记忆保留时长（秒），超过后抛弃该设备全部记忆",
+    "default": 300,
+    "hint": "默认 300 秒（5 分钟）"
+  },
+  "memory_rounds": {
+    "type": "int",
+    "description": "保留的最近对话轮数，超出后最早轮次压缩为摘要",
+    "default": 3,
+    "hint": "默认 3 轮"
+  }
+}
