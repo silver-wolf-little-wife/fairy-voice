@@ -30,7 +30,10 @@ try:
     )
     from astrbot.core.agent.tool import ToolSet
     from astrbot.core.message.components import Plain
-    from astrbot.core.message.message_type import MessageType
+    try:
+        from astrbot.core.platform.message_type import MessageType  # v4.27.2+
+    except ImportError:  # pragma: no cover —— 旧版本路径
+        from astrbot.core.message.message_type import MessageType
     from astrbot.core.platform.astr_message_event import AstrMessageEvent as _BaseEvent
     from astrbot.core.platform.astrbot_message import AstrBotMessage, MessageMember
     from astrbot.core.platform.platform_metadata import PlatformMetadata
