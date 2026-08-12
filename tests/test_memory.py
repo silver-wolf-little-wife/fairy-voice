@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "astrbot_plugin_fairy_voice"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from memory import ROLE_ASSISTANT, ROLE_USER, MemoryManager  # noqa: E402
 

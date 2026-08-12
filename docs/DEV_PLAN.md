@@ -31,7 +31,7 @@ C端（fairy-voice-app，Python）                 B端（AstrBot 插件，Pytho
 - [x] 文档写入 docs/PROTOCOL.md，双端同步
 
 ### M2 B 端插件骨架（第 2 周）
-- [x] `astrbot_plugin_fairy_voice/`：metadata.yaml + _conf_schema.json（ws_port / auth_token / heartbeat_timeout）
+- [x] 仓库根即插件根：metadata.yaml + _conf_schema.json（ws_port / auth_token / heartbeat_timeout）
 - [x] aiohttp WS 服务端：连接管理、token 校验、心跳超时清理（参考 cherry-astrbot/ws_server.py）
 - [x] 核心：收到 ask → 按 device_id 维护内存会话（见记忆策略实现），`llm_generate(contexts=recent)` 带上下文生成 → 回复回写 recent
 - [x] 记忆策略：仅保留最近 3 轮；超 3 轮且 5 分钟内再对话 → LLM 摘要压缩旧记忆注入 system_prompt；超 5 分钟未对话 → 清空记忆重开

@@ -1,33 +1,36 @@
 # fairy-voice
 
-> 双仓库协作项目：语音助手接入 AstrBot。
+> 双仓库协作项目：语音助手接入 AstrBot。本仓库 = **B 端 AstrBot 插件**（仓库根即插件根）。
 
 ## 架构
 
 ```
-[本机 fairy-voice-app]  --WebSocket-->  [B端 AstrBot 插件 astrbot_plugin_fairy_voice]
+[本机 fairy-voice-app]  --WebSocket-->  [B端 AstrBot 插件 fairy-voice]
      热键/按钮触发录音/识别                        LLM 生成 / Agent 工具循环
      TTS 播报 / 气泡显示  <--AI 回复--  (llm_generate / tool_loop_agent)
 ```
 
 - **C 端**：[fairy-voice-app](https://github.com/silver-wolf-little-wife/fairy-voice-app)（独立仓库，Python 语音终端），录音/识别/TTS，主动外连 B 端（穿透 NAT）
-- **B 端**：AstrBot 插件，内嵌 WebSocket 服务端，接收语音指令文本，调用 AstrBot LLM/Agent 处理，回传结果
+- **B 端**：本仓库（AstrBot 插件），内嵌 WebSocket 服务端，接收语音指令文本，调用 AstrBot LLM/Agent 处理，回传结果
 - **协议**：见 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)，双端共享，保持同步
 
 ## 目录
 
 ```
-fairy-voice/
-├─ astrbot_plugin_fairy_voice/   B 端 AstrBot 插件
-├─ tests/                        单元测试与 WS 冒烟测试
-└─ docs/                         协议与开发计划
+fairy-voice/                  ← 仓库根 = 插件根（插件名 astrbot_plugin_fairy_voice）
+├─ __init__.py                插件入口（FairyVoice Star）
+├─ main.py                    主逻辑：LLM 生成 / Agent 工具循环 / 记忆策略
+├─ ws_server.py               aiohttp WebSocket 服务端（hello/心跳/ask）
+├─ memory.py                  3 轮 + 5 分钟记忆策略
+├─ metadata.yaml              插件元数据
+├─ _conf_schema.json          配置项定义
+├─ docs/                      协议与开发计划
+└─ tests/                     单元测试与 WS 冒烟测试
 ```
 
-> C 端 App 为独立仓库：[silver-wolf-little-wife/fairy-voice-app](https://github.com/silver-wolf-little-wife/fairy-voice-app)
+## 安装（B 端插件）
 
-## B 端插件安装（astrbot_plugin_fairy_voice）
-
-1. 克隆本仓库，将 `astrbot_plugin_fairy_voice/` 目录放入 AstrBot 的 `data/plugins/` 下
+1. 克隆本仓库，将**仓库内容**放入 AstrBot 的 `data/plugins/astrbot_plugin_fairy_voice/`（或直接以目录名 `astrbot_plugin_fairy_voice` clone）
 2. 重启 AstrBot 或重载插件，在插件配置中设置：
 
 | 配置项 | 默认值 | 说明 |
@@ -48,11 +51,18 @@ fairy-voice/
 - 超出 3 轮且 5 分钟内再次对话：最早轮次交给 LLM 压缩为摘要（注入 system_prompt）
 - 超过 5 分钟未对话：抛弃全部记忆，视为新会话
 
+## 测试
+
+```bash
+python tests/test_memory.py    # 记忆策略
+python tests/test_ws_smoke.py  # WS 冒烟（本地起服，握手/心跳/ask 往返）
+```
+
 ## 状态
 
 - ✅ M1 协议定稿（`docs/PROTOCOL.md` v1.0.0）
 - ✅ M2 B 端插件骨架（WS 服务端 / 记忆策略 / LLM 接入 / 工具调用支持）
-- ✅ M3 C 端语音终端骨架（独立仓库 fairy-voice-app：WS 客户端 / 配置 / 断线重连）
+- ✅ M3 C 端语音终端骨架（独立仓库 fairy-voice-app，待重做为 Android）
 - ⬜ M4 语音闭环（录音 / 识别 / TTS）
 - ⬜ M5 打磨与安全
 

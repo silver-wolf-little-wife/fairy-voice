@@ -1,20 +1,10 @@
-# Python / AstrBot 插件
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 *.egg-info/
 .pytest_cache/
-
-# Android
-.gradle/
-build/
-local.properties
-*.apk
-*.aab
-captures/
-.externalNativeBuild/
-.cxx/
 
 # IDE
 .idea/
