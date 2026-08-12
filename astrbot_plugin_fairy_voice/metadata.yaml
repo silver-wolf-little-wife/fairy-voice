@@ -2,5 +2,5 @@ name: astrbot_plugin_fairy_voice # 插件唯一识别名，以 astrbot_plugin_ �
 display_name: Fairy Voice # 用于展示的名字
 desc: 手机语音助手接入器：接收 fairy-voice-app 的语音指令，调用 AstrBot LLM 处理并回传（含 3 轮+5 分钟记忆策略）。
 version: v0.1.0 # 插件版本号
-author: chengxiyue # 作者
-repo: https://github.com/chengxiyue/fairy-voice # 插件的仓库地址
+author: silver-wolf-little-wife # 作者
+repo: https://github.com/silver-wolf-little-wife/fairy-voice # 插件的仓库地址
