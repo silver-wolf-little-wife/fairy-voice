@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""ws_server.py 端到端冒烟测试：hello 握手 / ping / ask 全流程。"""
+"""ws_server.py 端到端冒烟测试：hello 握手 / ping / ask / voice_ask 全流程。"""
 
 import asyncio
 import sys
@@ -24,8 +24,21 @@ async def _boom(device_id: str, text: str) -> str:
     raise RuntimeError("boom")
 
 
+async def fake_asr_fn(wav_bytes: bytes, lang: str) -> str:
+    # 模拟识别：静音/无内容返回空，其余返回固定文本
+    if len(wav_bytes) < 100:
+        return ""
+    return "明天天气怎么样"
+
+
 async def main() -> None:
-    server = FairyWsServer(port=PORT, token=TOKEN, heartbeat_timeout=60, ask_handler=fake_ask_handler)
+    server = FairyWsServer(
+        port=PORT,
+        token=TOKEN,
+        heartbeat_timeout=60,
+        ask_handler=fake_ask_handler,
+        asr_fn=fake_asr_fn,
+    )
     await server.start()
     try:
         async with aiohttp.ClientSession() as sess:
@@ -72,7 +85,40 @@ async def main() -> None:
                 print("PASS handler 异常 → llm_error")
                 server.ask_handler = fake_ask_handler
 
-                # 7) 连接存活时设备列表应包含本机
+                # 7) voice_ask：识别 → ask 链路 → response 带 recognized
+                import base64
+                req_id = str(uuid.uuid4())
+                wav = b"\x00" * 800  # 模拟 16kHz WAV 数据（fake_asr_fn 返回文本）
+                await ws.send_json(
+                    {"type": "voice_ask", "id": req_id, "audio": base64.b64encode(wav).decode(), "lang": "zh-CN"}
+                )
+                resp = await ws.receive_json()
+                assert resp["ok"] is True, resp
+                assert resp["data"]["recognized"] == "明天天气怎么样", resp
+                assert resp["data"]["text"] == "echo[phone-1]: 明天天气怎么样", resp
+                print("PASS voice_ask → 识别+AI 回复")
+
+                # 8) voice_ask：识别结果为空 → empty_text
+                await ws.send_json(
+                    {"type": "voice_ask", "id": str(uuid.uuid4()), "audio": base64.b64encode(b"x" * 3).decode()}
+                )
+                resp = await ws.receive_json()
+                assert resp["ok"] is False and resp["error"]["code"] == "empty_text", resp
+                print("PASS voice_ask 无内容 → empty_text")
+
+                # 9) voice_ask：audio 为空 → empty_audio
+                await ws.send_json({"type": "voice_ask", "id": str(uuid.uuid4()), "audio": ""})
+                resp = await ws.receive_json()
+                assert resp["ok"] is False and resp["error"]["code"] == "empty_audio", resp
+                print("PASS voice_ask 空音频 → empty_audio")
+
+                # 10) voice_ask：base64 非法 → bad_audio
+                await ws.send_json({"type": "voice_ask", "id": str(uuid.uuid4()), "audio": "!!!not-base64!!!"})
+                resp = await ws.receive_json()
+                assert resp["ok"] is False and resp["error"]["code"] == "bad_audio", resp
+                print("PASS voice_ask 坏音频 → bad_audio")
+
+                # 11) 连接存活时设备列表应包含本机
                 devs = server.device_summary()
                 assert any(d["device_id"] == "phone-1" for d in devs), devs
                 print("PASS device_summary")

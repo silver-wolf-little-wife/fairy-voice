@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """B 端 WebSocket 服务端（仅依赖 aiohttp，独立于 AstrBot，便于测试）。
 
-协议见 docs/PROTOCOL.md：hello 握手 → 心跳 → ask/response。
+协议见 docs/PROTOCOL.md（v1.1.0）：hello 握手 → 心跳 → ask / voice_ask → response。
 - ask（C→B）：{"type":"ask","id":...,"text":"...","lang":"zh-CN"}
-- response（B→C）：{"type":"response","id":...,"ok":...,"data":{"text":...}}
+- voice_ask（C→B）：{"type":"voice_ask","id":...,"audio":"<base64 WAV>","lang":"zh-CN"}
+  B 端 ASR 识别后走同一 ask 链路（记忆/LLM/工具），response 携带 recognized 字段。
+- response（B→C）：{"type":"response","id":...,"ok":...,"data":{"text":...,"recognized":...}}
 与 Cherry Remote 相反：本服务端不主动下发指令，只接收语音指令并回传 AI 回复。
 """
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -27,6 +30,7 @@ class FairyWsServer:
         token: str,
         heartbeat_timeout: int = 60,
         ask_handler=None,
+        asr_fn=None,
     ):
         """
         Args:
@@ -34,11 +38,13 @@ class FairyWsServer:
             token: 握手认证 token。
             heartbeat_timeout: 心跳超时秒数。
             ask_handler: async (device_id: str, text: str) -> str，返回 AI 回复文本。
+        asr_fn: async (wav_bytes: bytes, lang: str) -> str，语音识别，返回文本。
         """
         self.port = port
         self.token = token
         self.heartbeat_timeout = heartbeat_timeout
         self.ask_handler = ask_handler
+        self.asr_fn = asr_fn
         self.devices: dict[str, dict] = {}  # device_id -> {ws, session_id, last_seen}
         self._locks: dict[str, asyncio.Lock] = {}  # device_id -> 串行锁
         self._app = web.Application()
@@ -92,6 +98,9 @@ class FairyWsServer:
                 elif mtype == "ask":
                     if device_id:
                         await self._handle_ask(ws, device_id, data)
+                elif mtype == "voice_ask":
+                    if device_id:
+                        await self._handle_voice_ask(ws, device_id, data)
         finally:
             if device_id and self.devices.get(device_id, {}).get("ws") is ws:
                 self.devices.pop(device_id, None)
@@ -165,6 +174,57 @@ class FairyWsServer:
                 "id": req_id,
                 "ok": True,
                 "data": {"text": reply},
+                "error": None,
+            }
+        )
+
+    async def _handle_voice_ask(
+        self, ws: web.WebSocketResponse, device_id: str, data: dict
+    ) -> None:
+        """语音指令（M4-2）：ASR 识别 → 走 ask 链路 → 回传 AI 回复与识别文本。
+
+        在同一设备串行锁内完成识别与 LLM 调用，保证记忆会话无竞态；
+        voice_ask 失败按 response 错误码回传，不中断连接。
+        """
+        audio_b64 = data.get("audio") or ""
+        req_id = data.get("id") or str(uuid.uuid4())
+        lang = data.get("lang") or "zh-CN"
+        if not audio_b64:
+            await self._send_error(ws, req_id, "empty_audio", "音频为空")
+            return
+        if self.asr_fn is None:
+            await self._send_error(ws, req_id, "asr_unavailable", "语音识别未初始化")
+            return
+        if self.ask_handler is None:
+            await self._send_error(ws, req_id, "internal_error", "插件未初始化")
+            return
+        try:
+            audio = base64.b64decode(audio_b64)
+        except Exception:
+            await self._send_error(ws, req_id, "bad_audio", "音频解码失败")
+            return
+        lock = self._locks.setdefault(device_id, asyncio.Lock())
+        try:
+            async with lock:
+                recognized = await self.asr_fn(audio, lang)
+                text = (recognized or "").strip()
+                if not text:
+                    await self._send_error(ws, req_id, "empty_text", "未能识别到语音内容")
+                    return
+                reply = await self.ask_handler(device_id, text)
+        except asyncio.TimeoutError:
+            await self._send_error(ws, req_id, "llm_error", "AI 处理超时")
+            return
+        except Exception as e:  # noqa: BLE001 —— 错误码回传，不中断连接
+            logger.exception(f"voice_ask 处理失败 device={device_id}")
+            await self._send_error(ws, req_id, "llm_error", str(e))
+            return
+        await ws.send_json(
+            {
+                "type": "response",
+                "id": req_id,
+                "ok": True,
+                "data": {"text": reply, "recognized": text},
                 "error": None,
             }
         )
