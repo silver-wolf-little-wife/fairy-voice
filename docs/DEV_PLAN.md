@@ -51,11 +51,15 @@ C端（fairy-voice-android，Android）              B端（AstrBot 插件，Pyt
 
 ### M4 语音闭环（第 4 周）
 - [x] 录音（AudioRecord 16kHz/16bit/单声道 → WAV）← **M4-1 已完成（2026-08-13，C 端 fairy-voice-android）**
+- [x] 唤醒交互修复（磁贴/通知栏点击无反应 → Intent action 驱动；磁贴恒暗态）← **M4-1.1 已完成（2026-08-13）**
+- [ ] **悬浮窗 / 流体云交互**：唤醒后不拉起全屏 App，直接录音并出现悬浮胶囊（录音中/识别中/等待AI），
+      点胶囊展开卡片显示 AI 回复文本；优先 ColorOS 16 Live Updates 接入流体云（无审批），
+      兜底 SYSTEM_ALERT_WINDOW 悬浮窗（小布/Siri 式）← **M4-1.2，计划见 C 端 docs/PLAN_M4_OVERLAY.md（待确认 ColorOS 版本）**
 - [ ] 语音识别（本地 whisper.cpp/faster-whisper 或云端 ASR API）
 - [ ] TTS 播报（Android 系统 TTS 或 edge-tts/云端 TTS）
 - [ ] 完整链路：触发 → 录音 → 识别 → WS 发送 → AI 回复 → TTS 播报
 - [ ] 不做连续问答 UI（按一次答一次），AI 侧保留 3 轮内上下文记忆（超出按记忆策略压缩/抛弃）
-- [ ] 状态机：空闲/录音中/识别中/等待AI/播报中（界面/通知栏显示状态）
+- [ ] 状态机：空闲/录音中/识别中/等待AI/播报中（悬浮胶囊/通知栏显示状态，状态枚举已就位）
 - [ ] 唤醒词预留：后续可在录音链路前加轻量唤醒（可选项）
 
 ### M5 打磨与安全（第 5 周）
@@ -120,6 +124,7 @@ session["last_active"] = now
 ## 参考
 
 - C 端语音终端：`D:\project\fairy-voice-android`（GitHub: silver-wolf-little-wife/fairy-voice-app）
+- M4-1.2 悬浮窗/流体云计划：`fairy-voice-android/docs/PLAN_M4_OVERLAY.md`
 - 插件架构与 WS 服务端：`D:\project\cherry-astrbot`
 - 协议模式：`cherry-astrbot/docs/PROTOCOL.md`
 - AstrBot 插件 API：`D:\project\AstrBot\docs\zh\dev\star\guides\ai.md`
