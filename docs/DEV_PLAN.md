@@ -50,7 +50,7 @@ C端（fairy-voice-android，Android）              B端（AstrBot 插件，Pyt
       重复 start() 需幂等（防双重连循环）；配置变更需重建 client；UI 状态 2s 轮询自动刷新
 
 ### M4 语音闭环（第 4 周）
-- [ ] 录音（AudioRecord 16kHz/16bit/单声道 → WAV）
+- [x] 录音（AudioRecord 16kHz/16bit/单声道 → WAV）← **M4-1 已完成（2026-08-13，C 端 fairy-voice-android）**
 - [ ] 语音识别（本地 whisper.cpp/faster-whisper 或云端 ASR API）
 - [ ] TTS 播报（Android 系统 TTS 或 edge-tts/云端 TTS）
 - [ ] 完整链路：触发 → 录音 → 识别 → WS 发送 → AI 回复 → TTS 播报
