@@ -1,16 +1,16 @@
 # fairy-voice 开发计划
 
 > 目标：按钮触发式语音助手，通过 WebSocket 接入 AstrBot，由 AstrBot 的 LLM/Agent 处理语音指令并回传结果。
-> C 端为独立仓库 fairy-voice-app（Python 语音终端），本仓库仅含 B 端插件。
+> C 端为独立仓库 fairy-voice-android（Android 语音终端，已接管原 fairy-voice-app 仓库），本仓库仅含 B 端插件。
 > 架构参考：cherry-astrbot（B 端插件） + cherry-remote-app（C 端执行器）的双仓库协作模式。
 
 ## 整体架构
 
 ```
-C端（fairy-voice-app，Python）                 B端（AstrBot 插件，Python）
+C端（fairy-voice-android，Android）              B端（AstrBot 插件，Python）
 ┌──────────────────────────┐                 ┌──────────────────────────┐
-│ 热键/托盘触发录音         │                 │ aiohttp WS 服务端         │
-│   ↓ 按下                  │   WS 主动外连    │   ↓ hello/token 握手      │
+│ 磁贴/通知栏/音量键唤醒    │                 │ aiohttp WS 服务端         │
+│   ↓ 触发                  │   WS 主动外连    │   ↓ hello/token 握手      │
 │ 录音 + 语音识别           │ ──────────────▶ │   ↓ 收到 ask 请求         │
 │   ↓ 识别文本               │    JSON 帧      │ llm_generate /           │
 │ WS 客户端发送 ask          │                 │ tool_loop_agent          │
@@ -22,6 +22,8 @@ C端（fairy-voice-app，Python）                 B端（AstrBot 插件，Pytho
 - 传输：WebSocket，C 端主动外连 B 端（穿透 NAT），复用 cherry 的 hello/心跳/request-response 帧模式
 - 角色：C = 语音采集与播报（纯终端），B = AI 大脑（LLM 生成 + Agent 工具循环）
 - 与 cherry 的区别：cherry 的 C 端是"执行器"，本项目的 C 端是"语音终端"；B 端新增"把手机指令喂给 AstrBot LLM"的环节
+- 历史：C 端最初规划为 Python 终端（fairy-voice-app），M3 联调阶段切换为 Android App（fairy-voice-android），
+  原 fairy-voice-app 本地仓库已删除，其 GitHub 仓库绑定为 fairy-voice-android 的远程（线上历史已由 Android 工程覆盖）
 
 ## 里程碑
 
@@ -38,26 +40,29 @@ C端（fairy-voice-app，Python）                 B端（AstrBot 插件，Pytho
 - [x] 进阶：`tool_loop_agent` 工具调用（伪造最小 event，enable_tools 配置开启，默认关，待实机验证）
 - [x] 命令：`/fairy` 查看在线设备与状态
 
-### M3 C 端语音终端骨架（第 3 周）—— 独立仓库 [fairy-voice-app](https://github.com/silver-wolf-little-wife/fairy-voice-app)
-- [x] Python 常驻应用（仿 cherry-remote-app 形态）：`src/fairy_voice_app` 包
-- [x] WS 客户端（aiohttp）：hello 握手 / 心跳 / ask 请求响应 / 断线指数退避重连
-- [x] 配置：config.example.yaml（server_url / auth_token / device_id / 心跳 / ask 超时）
-- [x] 测试：tests/test_ws_client.py（本地模拟 B 端，5 用例全绿）
-- [x] 联调入口：`python -m fairy_voice_app -c config.yaml`（当前命令行输入指令）
+### M3 C 端语音终端骨架（第 3 周）—— Android App（fairy-voice-android）
+- [x] Android 工程：Kotlin + OkHttp，WS 客户端（hello 握手 / 心跳 / ask 请求响应 / 断线指数退避重连）
+- [x] 配置：服务器地址 / auth_token / device_id / 心跳间隔 / ask 超时（SharedPreferences 持久化）
+- [x] 前台服务 ConnectionService：常驻 + 通知栏（点击/唤醒按钮拉起主界面）
+- [x] 唤醒入口：无障碍音量键（音量上+下 0.5s）、控制中心磁贴、通知栏唤醒按钮
+- [x] 联调：手动输入指令触发 ask，B 端回复回显（已实机验证：设备 android-phone 上线，问答通）
+- [x] 关键修复记录：动态广播需 RECEIVER_NOT_EXPORTED；ws:// 明文需 usesCleartextTraffic=true；
+      重复 start() 需幂等（防双重连循环）；配置变更需重建 client；UI 状态 2s 轮询自动刷新
 
 ### M4 语音闭环（第 4 周）
-- [ ] 录音（sounddevice）+ 语音识别（本地 faster-whisper 或系统 API）
-- [ ] TTS 播报（edge-tts / pyttsx3），热键/托盘触发录音
+- [ ] 录音（AudioRecord 16kHz/16bit/单声道 → WAV）
+- [ ] 语音识别（本地 whisper.cpp/faster-whisper 或云端 ASR API）
+- [ ] TTS 播报（Android 系统 TTS 或 edge-tts/云端 TTS）
 - [ ] 完整链路：触发 → 录音 → 识别 → WS 发送 → AI 回复 → TTS 播报
 - [ ] 不做连续问答 UI（按一次答一次），AI 侧保留 3 轮内上下文记忆（超出按记忆策略压缩/抛弃）
-- [ ] 状态机：空闲/录音中/识别中/等待AI/播报中（托盘/气泡显示状态）
+- [ ] 状态机：空闲/录音中/识别中/等待AI/播报中（界面/通知栏显示状态）
 - [ ] 唤醒词预留：后续可在录音链路前加轻量唤醒（可选项）
 
 ### M5 打磨与安全（第 5 周）
 - [ ] TTS 语速/音量设置、识别语言切换
-- [ ] token 本地加密存储、WS 支持 wss（TLS 部署见 fairy-voice-app/docs/DEPLOY.md）
-- [ ] PyInstaller 打包独立 exe（Release 分发）
-- [ ] 开机自启 / 托盘常驻
+- [ ] token 本地加密存储（EncryptedSharedPreferences）、WS 支持 wss（TLS 部署见 docs/DEPLOY.md）
+- [ ] Android Release 打包（签名 APK / AAB，取代原 PyInstaller exe 方案）
+- [ ] 开机自启 / 服务常驻
 
 ## B 端关键技术点（已确认，来自 AstrBot 官方文档）
 
@@ -114,7 +119,7 @@ session["last_active"] = now
 
 ## 参考
 
-- C 端语音终端：`D:\project\fairy-voice-app`（GitHub: silver-wolf-little-wife/fairy-voice-app）
+- C 端语音终端：`D:\project\fairy-voice-android`（GitHub: silver-wolf-little-wife/fairy-voice-app）
 - 插件架构与 WS 服务端：`D:\project\cherry-astrbot`
 - 协议模式：`cherry-astrbot/docs/PROTOCOL.md`
 - AstrBot 插件 API：`D:\project\AstrBot\docs\zh\dev\star\guides\ai.md`
