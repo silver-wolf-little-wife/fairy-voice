@@ -1,5 +1,16 @@
 # fairy-voice
 
+> # ⛔ 本仓库已弃用并归档（2026-08-14）
+>
+> **项目现状**：fairy-voice 语音助手的 C 端（Android）已改为**直连 AstrBot 的 OneBot V11 适配器（aiocqhttp） + 本地 ASR（sherpa-onnx）**，不再需要本自研 B 端插件。
+> - C 端采用 OneBot 11 反向 WS（universal 单连接）上报语音指令文本，走 AstrBot 原生 LLM/工具/会话链路
+> - ASR 从本插件（faster-whisper）**迁移至 C 端本地**（sherpa-onnx + paraformer-zh）
+> - 本仓库代码**保留作参考与回退通道**，不再维护，新增开发请移步：
+>   - C 端仓库：[fairy-voice-app](https://github.com/silver-wolf-little-wife/fairy-voice-app)（即本地 `fairy-voice-android`）
+>   - 新方案计划：C 端 `docs/PLAN_ONEBOT_MIGRATION.md`
+>
+> 以下为归档前的原始说明（历史参考）。
+
 > 双仓库协作项目：语音助手接入 AstrBot。本仓库 = **B 端 AstrBot 插件**（仓库根即插件根）。
 
 ## 架构
