@@ -3,16 +3,15 @@
 
 B 端：
 - 内嵌 aiohttp WebSocket 服务端，接受手机 App（fairy-voice-app）主动外连。
-- 收到 ask（语音指令文本）→ 按 device_id 记忆策略（3 轮 + 5 分钟压缩/抛弃）组装上下文
-  → 调用 AstrBot LLM（context.llm_generate / tool_loop_agent）→ 回传 AI 回复文本。
+- 收到 ask / voice_ask（语音指令）后按 device_id 记忆策略（3 轮 + 5 分钟压缩/抛弃）组装上下文，
+  调用 AstrBot LLM（Provider.text_chat_stream 流式 / tool_loop_agent 非流式）→ 流式回传 AI 回复。
+- 协议 v2.0（docs/PROTOCOL.md）：stream_begin / stream_delta / stream_end，无 TTS。
 
 会话与工具：
-- 每个 device_id 是独立会话（B 端内存记忆），不绑定真实聊天，umo 为 fairy_voice:friend:{device_id}。
+- 每个 device_id 是独立会话（B 端内存记忆），不绑定真实聊天，umo = fairy_voice:friend:{device_id}。
 - 无真实 event 时构造最小 AstrMessageEvent（三个类均可无平台构造，已源码验证），
-  因此 tool_loop_agent（自动工具循环）可用；工具注册表全局共享，米家/远程电脑等
+  因此 tool_loop_agent（自动工具循环）可用；工具注册表全局共享，米家/远程电脑
   已注册工具均可被语音指令调用（enable_tools 开启后）。
-
-协议见 docs/PROTOCOL.md。
 """
 
 import asyncio
@@ -37,14 +36,17 @@ try:
     from astrbot.core.platform.astr_message_event import AstrMessageEvent as _BaseEvent
     from astrbot.core.platform.astrbot_message import AstrBotMessage, MessageMember
     from astrbot.core.platform.platform_metadata import PlatformMetadata
+    from astrbot.core.provider.provider import Provider
 except ImportError:  # pragma: no cover —— 兼容旧版本
     _BaseEvent = None  # type: ignore
     AssistantMessageSegment = None  # type: ignore
     TextPart = None  # type: ignore
     UserMessageSegment = None  # type: ignore
     ToolSet = None  # type: ignore
+    Provider = None  # type: ignore
 
 from .asr import WhisperASR
+from .deltas import split_delta
 from .memory import ROLE_ASSISTANT, ROLE_USER, MemoryManager
 from .ws_server import FairyWsServer
 
@@ -58,8 +60,8 @@ PLATFORM_ID = "fairy_voice"
 @register(
     "astrbot_plugin_fairy_voice",
     "chengxiyue",
-    "手机语音助手接入器：接收 fairy-voice-app 语音指令，调用 AstrBot LLM 处理并回传",
-    "0.1.0",
+    "手机语音助手接入器：接收 fairy-voice-app 语音指令，调用 AstrBot LLM 流式处理并回传",
+    "0.2.0",
 )
 class FairyVoice(Star):
     """Fairy Voice —— 手机语音助手接入插件。"""
@@ -91,10 +93,11 @@ class FairyVoice(Star):
             token=token,
             heartbeat_timeout=heartbeat_timeout,
             ask_handler=self._handle_ask,
+            ask_stream_handler=self._handle_ask_stream,
             asr_fn=self._handle_asr,
         )
         self._server_task = asyncio.create_task(self.server.start())
-        logger.info("Fairy Voice 插件初始化完成。")
+        logger.info("Fairy Voice 插件初始化完成（协议 v2.0 流式）")
 
     # ---------- ASR（M4-2） ----------
 
@@ -102,10 +105,76 @@ class FairyVoice(Star):
         """语音识别入口：懒加载模型，返回识别文本。"""
         return await self._asr.recognize(wav_bytes, lang or self._asr_lang)
 
-    # ---------- ask 处理核心 ----------
+    # ---------- ask 处理核心（v2.0 流式） ----------
+
+    async def _handle_ask_stream(self, device_id: str, text: str):
+        """流式 ask：记忆策略 → Provider.text_chat_stream 逐增量 yield → 回写记忆。
+
+        yield 语义：每个元素是增量文本片段；全部结束后由 ws_server 聚合并发 stream_end。
+        assistant 记忆以完整文本写入，避免 delta 拼接脏数据。
+        工具模式（enable_tools）V1 保持非流式：tool_loop_agent 完整返回后单次 yield。
+        """
+        event = self._build_event(device_id, text)
+        provider_id = await self._resolve_provider_id(event.unified_msg_origin)
+        session = self.memory.get(device_id)
+        session.add_user(text)
+
+        # 超出 rounds 轮：把最早一轮压缩进摘要（无需工具）
+        if session.needs_compress():
+            old = session.pop_oldest_round()
+            content = "\n".join(f"{m['role']}: {m['content']}" for m in old)
+            try:
+                sum_resp = await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=COMPRESS_PROMPT.format(content=content),
+                )
+                session.set_summary(sum_resp.completion_text.strip())
+            except Exception as e:  # noqa: BLE001 —— 压缩失败不阻断对话
+                logger.warning(f"记忆压缩失败（继续对话）: {e}")
+
+        contexts = [
+            self._build_message(m["role"], m["content"]) for m in session.recent
+        ]
+
+        full = ""
+        if self._enable_tools and ToolSet is not None:
+            resp = await self.context.tool_loop_agent(
+                event=event,
+                chat_provider_id=provider_id,
+                contexts=contexts,
+                tools=self._all_tools(),
+                max_steps=self._tool_max_steps,
+            )
+            full = resp.completion_text
+            if full:
+                yield full
+        else:
+            prov = await self.context.provider_manager.get_provider_by_id(provider_id)
+            if prov is None or not self._provider_supports_stream(prov):
+                # 降级：非流式 Provider（基类未实现 text_chat_stream）
+                resp = await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    system_prompt=session.summary,
+                    contexts=contexts,
+                )
+                full = resp.completion_text
+                if full:
+                    yield full
+            else:
+                async for chunk in prov.text_chat_stream(
+                    system_prompt=session.summary,
+                    contexts=contexts,
+                ):
+                    delta, full = split_delta(full, chunk.completion_text or "")
+                    if delta:
+                        yield delta
+        session.add_assistant(full)
 
     async def _handle_ask(self, device_id: str, text: str) -> str:
-        """记忆策略 → LLM 生成（可选工具循环）→ 回写记忆。"""
+        """非流式兜底：记忆策略 → LLM 生成（可选工具循环）→ 回写记忆。
+
+        ws_server 优先使用 ask_stream_handler，此方法仅作流式不可用时的回退。
+        """
         event = self._build_event(device_id, text)
         provider_id = await self._resolve_provider_id(event.unified_msg_origin)
         session = self.memory.get(device_id)
@@ -146,6 +215,13 @@ class FairyVoice(Star):
         session.add_assistant(reply)
         return reply
 
+    @staticmethod
+    def _provider_supports_stream(prov) -> bool:
+        """Provider 子类是否真正实现了 text_chat_stream（基类为 raise NotImplementedError）。"""
+        if Provider is None:
+            return hasattr(prov, "text_chat_stream")
+        return type(prov).text_chat_stream is not Provider.text_chat_stream
+
     async def _resolve_provider_id(self, umo: str) -> str:
         """先按会话 umo 取（支持会话隔离），失败回退全局默认。"""
         for candidate in (umo, None):
@@ -184,7 +260,7 @@ class FairyVoice(Star):
         )
 
     def _build_message(self, role: str, content: str):
-        """把记忆消息转成 AstrBot Message segment。"""
+        """把记忆消息转为 AstrBot Message segment。"""
         if AssistantMessageSegment is None or TextPart is None or UserMessageSegment is None:
             raise RuntimeError("AstrBot 版本过旧，缺少 agent.message 模块")
         cls = UserMessageSegment if role == ROLE_USER else AssistantMessageSegment
@@ -215,8 +291,9 @@ class FairyVoice(Star):
             )
             return
         lines = [
-            f"- {d['device_id']}（session {d['session_id'][:8]}）"
+            f"- {d['device_id']}（session {d['session_id'][:8]}"
             + ("，工具模式开启" if self._enable_tools else "")
+            + "）"
             for d in devices
         ]
         mem = self.memory.summary()

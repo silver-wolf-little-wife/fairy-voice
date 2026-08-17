@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""ws_server.py 端到端冒烟测试：hello 握手 / ping / ask / voice_ask 全流程。"""
+"""ws_server.py 端到端冒烟测试（协议 v2.0 流式）：hello 握手 / ping / ask / voice_ask / 流式全流程。"""
 
 import asyncio
+import base64
 import sys
 import uuid
 from pathlib import Path
@@ -20,15 +21,42 @@ async def fake_ask_handler(device_id: str, text: str) -> str:
     return f"echo[{device_id}]: {text}"
 
 
+async def fake_ask_stream_handler(device_id: str, text: str):
+    # 模拟流式：分段 yield 增量
+    for part in ["你好", "，", "世界", "！"]:
+        yield part
+
+
 async def _boom(device_id: str, text: str) -> str:
     raise RuntimeError("boom")
 
 
+async def _boom_stream(device_id: str, text: str):
+    yield "前半段"
+    raise RuntimeError("boom")
+
+
 async def fake_asr_fn(wav_bytes: bytes, lang: str) -> str:
-    # 模拟识别：静音/无内容返回空，其余返回固定文本
+    # 模拟识别：静音无内容返回空，其余返回固定文本
     if len(wav_bytes) < 100:
         return ""
     return "明天天气怎么样"
+
+
+async def _recv_stream(ws, expect_begin_recognized=None) -> dict:
+    """收取一轮完整流式响应，返回 {recognized, deltas, end}。"""
+    first = await ws.receive_json()
+    assert first["type"] == "stream_begin", first
+    if expect_begin_recognized is not None:
+        assert first.get("recognized") == expect_begin_recognized, first
+    deltas = []
+    while True:
+        frame = await ws.receive_json()
+        if frame["type"] == "stream_delta":
+            deltas.append(frame["delta"])
+            continue
+        assert frame["type"] == "stream_end", frame
+        return {"recognized": first.get("recognized"), "deltas": deltas, "end": frame}
 
 
 async def main() -> None:
@@ -37,6 +65,7 @@ async def main() -> None:
         token=TOKEN,
         heartbeat_timeout=60,
         ask_handler=fake_ask_handler,
+        ask_stream_handler=fake_ask_stream_handler,
         asr_fn=fake_asr_fn,
     )
     await server.start()
@@ -52,11 +81,12 @@ async def main() -> None:
             # 2) 正确握手 + 全流程
             async with sess.ws_connect(f"ws://127.0.0.1:{PORT}/ws") as ws:
                 await ws.send_json(
-                    {"type": "hello", "token": TOKEN, "device_id": "phone-1", "client_version": "0.1.0"}
+                    {"type": "hello", "token": TOKEN, "device_id": "phone-1", "client_version": "0.2.0"}
                 )
                 ack = await ws.receive_json()
                 assert ack["ok"] is True and ack.get("session_id"), ack
-                print("PASS hello 握手成功")
+                assert ack.get("server_version") == "0.2.0", ack
+                print("PASS hello 握手成功（server_version 0.2.0）")
 
                 # 3) 心跳
                 await ws.send_json({"type": "ping"})
@@ -64,58 +94,65 @@ async def main() -> None:
                 assert pong == {"type": "pong"}, pong
                 print("PASS ping/pong")
 
-                # 4) ask 正常流程
+                # 4) ask 流式：begin → delta×4 → end(ok, text 拼接完整)
                 req_id = str(uuid.uuid4())
                 await ws.send_json({"type": "ask", "id": req_id, "text": "你好"})
-                resp = await ws.receive_json()
-                assert resp["ok"] is True and resp["data"]["text"] == "echo[phone-1]: 你好", resp
-                print("PASS ask → AI 回复")
+                got = await _recv_stream(ws)
+                assert got["deltas"] == ["你好", "，", "世界", "！"], got
+                end = got["end"]
+                assert end["ok"] is True and end["data"]["text"] == "你好，世界！", end
+                assert end["id"] == req_id, end
+                print("PASS ask 流式（begin/delta×4/end，完整文本正确）")
 
-                # 5) 空文本
+                # 5) 空文本：未发 begin，直接 response 错误帧
                 await ws.send_json({"type": "ask", "id": str(uuid.uuid4()), "text": "   "})
                 resp = await ws.receive_json()
-                assert resp["ok"] is False and resp["error"]["code"] == "empty_text", resp
-                print("PASS 空文本报错")
+                assert resp["type"] == "response" and resp["ok"] is False, resp
+                assert resp["error"]["code"] == "empty_text", resp
+                print("PASS 空文本报错（单帧 response）")
 
-                # 6) handler 抛异常 → llm_error
-                server.ask_handler = _boom
+                # 6) 流中异常：已发 begin → stream_end(ok:false, code llm_error)
+                server.ask_stream_handler = _boom_stream
                 await ws.send_json({"type": "ask", "id": str(uuid.uuid4()), "text": "boom"})
-                resp = await ws.receive_json()
-                assert resp["ok"] is False and resp["error"]["code"] == "llm_error", resp
-                print("PASS handler 异常 → llm_error")
-                server.ask_handler = fake_ask_handler
+                got = await _recv_stream(ws)
+                assert got["deltas"] == ["前半段"], got
+                assert got["end"]["ok"] is False, got["end"]
+                assert got["end"]["error"]["code"] == "llm_error", got["end"]
+                print("PASS 流中异常 → stream_end(ok:false, llm_error)")
+                server.ask_stream_handler = fake_ask_stream_handler
 
-                # 7) voice_ask：识别 → ask 链路 → response 带 recognized
-                import base64
+                # 7) voice_ask 流式：begin 携带 recognized → delta → end
                 req_id = str(uuid.uuid4())
                 wav = b"\x00" * 800  # 模拟 16kHz WAV 数据（fake_asr_fn 返回文本）
                 await ws.send_json(
                     {"type": "voice_ask", "id": req_id, "audio": base64.b64encode(wav).decode(), "lang": "zh-CN"}
                 )
-                resp = await ws.receive_json()
-                assert resp["ok"] is True, resp
-                assert resp["data"]["recognized"] == "明天天气怎么样", resp
-                assert resp["data"]["text"] == "echo[phone-1]: 明天天气怎么样", resp
-                print("PASS voice_ask → 识别+AI 回复")
+                got = await _recv_stream(ws, expect_begin_recognized="明天天气怎么样")
+                assert got["end"]["ok"] is True, got["end"]
+                assert got["end"]["data"]["text"] == "你好，世界！", got["end"]
+                print("PASS voice_ask 流式（recognized 携带 + 完整文本）")
 
-                # 8) voice_ask：识别结果为空 → empty_text
+                # 8) voice_ask：识别结果为空 → empty_text（单帧 response）
                 await ws.send_json(
                     {"type": "voice_ask", "id": str(uuid.uuid4()), "audio": base64.b64encode(b"x" * 3).decode()}
                 )
                 resp = await ws.receive_json()
-                assert resp["ok"] is False and resp["error"]["code"] == "empty_text", resp
+                assert resp["type"] == "response" and resp["ok"] is False, resp
+                assert resp["error"]["code"] == "empty_text", resp
                 print("PASS voice_ask 无内容 → empty_text")
 
                 # 9) voice_ask：audio 为空 → empty_audio
                 await ws.send_json({"type": "voice_ask", "id": str(uuid.uuid4()), "audio": ""})
                 resp = await ws.receive_json()
-                assert resp["ok"] is False and resp["error"]["code"] == "empty_audio", resp
+                assert resp["type"] == "response" and resp["ok"] is False, resp
+                assert resp["error"]["code"] == "empty_audio", resp
                 print("PASS voice_ask 空音频 → empty_audio")
 
                 # 10) voice_ask：base64 非法 → bad_audio
                 await ws.send_json({"type": "voice_ask", "id": str(uuid.uuid4()), "audio": "!!!not-base64!!!"})
                 resp = await ws.receive_json()
-                assert resp["ok"] is False and resp["error"]["code"] == "bad_audio", resp
+                assert resp["type"] == "response" and resp["ok"] is False, resp
+                assert resp["error"]["code"] == "bad_audio", resp
                 print("PASS voice_ask 坏音频 → bad_audio")
 
                 # 11) 连接存活时设备列表应包含本机
@@ -127,5 +164,34 @@ async def main() -> None:
     print("冒烟测试全部通过")
 
 
+async def legacy_main() -> None:
+    """非流式回退：仅 ask_handler（无 ask_stream_handler）时仍回单帧 response。"""
+    server = FairyWsServer(
+        port=PORT + 1,
+        token=TOKEN,
+        heartbeat_timeout=60,
+        ask_handler=fake_ask_handler,
+        asr_fn=fake_asr_fn,
+    )
+    await server.start()
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.ws_connect(f"ws://127.0.0.1:{PORT + 1}/ws") as ws:
+                await ws.send_json(
+                    {"type": "hello", "token": TOKEN, "device_id": "phone-legacy", "client_version": "0.1.0"}
+                )
+                ack = await ws.receive_json()
+                assert ack["ok"] is True, ack
+                await ws.send_json({"type": "ask", "id": str(uuid.uuid4()), "text": "你好"})
+                resp = await ws.receive_json()
+                assert resp["type"] == "response" and resp["ok"] is True, resp
+                assert resp["data"]["text"] == "echo[phone-legacy]: 你好", resp
+                print("PASS 非流式回退：ask_handler 单帧 response")
+    finally:
+        await server.stop()
+
+
 if __name__ == "__main__":
     asyncio.run(main())
+    asyncio.run(legacy_main())
+    print("全部冒烟测试通过（含非流式回退）")
