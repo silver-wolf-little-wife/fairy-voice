@@ -1,149 +1,81 @@
-# fairy-voice 开发计划
+# Fairy Voice 开发计划 v2.0（流式输出）
 
-> 目标：按钮触发式语音助手，通过 WebSocket 接入 AstrBot，由 AstrBot 的 LLM/Agent 处理语音指令并回传结果。
-> C 端为独立仓库 fairy-voice-android（Android 语音终端，已接管原 fairy-voice-app 仓库），本仓库仅含 B 端插件。
-> 架构参考：cherry-astrbot（B 端插件） + cherry-remote-app（C 端执行器）的双仓库协作模式。
+> 状态：**M5 重启（2026-08-17）**。仓库已取消归档，恢复自研协议路线。
+> 目标：纯文字**流式输出**，无 TTS。核心动机是降低用户停顿感——首 token 尽快上屏。
 
-## 整体架构
+## 1. 架构决策（2026-08-17）
+
+- **放弃 OneBot 直连主线**：P0~P4（2026-08-14）已完成并验收，但 OneBot/aiocqhttp 路径无法做到 token 级流式（适配器按标点分段或整体缓冲），达不到「更早接到消息」的目标。保留作回退方案。
+- **恢复自研 WS 协议并升级 v2.0**：C 端回到 `FairyVoiceClient`（协议 v1.1.0 代码仍在），B 端复用现有 `ws_server.py` / 记忆 / 工具链。
+- **砍 TTS**：M4-3 不再实施。纯文字增量渲染（打字机效果），响应感更强、链路更短。
+- **流式语义**：B 端 `Provider.text_chat_stream`（上游 AstrBot 已实现，OpenAI/Gemini/Anthropic 源均支持）逐 token 转发为 `stream_delta` 帧。
+
+## 2. 协议 v2.0 变更（同步更新 docs/PROTOCOL.md）
+
+新增三类帧（C→B 的 ask / voice_ask 不变）：
 
 ```
-C端（fairy-voice-android，Android）              B端（AstrBot 插件，Python）
-┌──────────────────────────┐                 ┌──────────────────────────┐
-│ 磁贴/通知栏/音量键唤醒    │                 │ aiohttp WS 服务端         │
-│   ↓ 触发                  │   WS 主动外连    │   ↓ hello/token 握手      │
-│ 录音 + 语音识别           │ ──────────────▶ │   ↓ 收到 ask 请求         │
-│   ↓ 识别文本               │    JSON 帧      │ llm_generate /           │
-│ WS 客户端发送 ask          │                 │ tool_loop_agent          │
-│   ↓                       │ ◀────────────── │   ↓ AI 结果回传           │
-│ TTS 播报                  │    response     │                          │
-└──────────────────────────┘                 └──────────────────────────┘
+B → C: {"type": "stream_begin", "id": "<uuid>", "recognized": "识别文本(可选)"}
+B → C: {"type": "stream_delta", "id": "<uuid>", "delta": "增量文本"}
+B → C: {"type": "stream_end",   "id": "<uuid>", "ok": true,
+         "data": {"text": "完整回复文本"}}   // text 兜底，流式丢帧可恢复
 ```
 
-- 传输：WebSocket，C 端主动外连 B 端（穿透 NAT），复用 cherry 的 hello/心跳/request-response 帧模式
-- 角色：C = 语音采集与播报（纯终端），B = AI 大脑（LLM 生成 + Agent 工具循环）
-- 与 cherry 的区别：cherry 的 C 端是"执行器"，本项目的 C 端是"语音终端"；B 端新增"把手机指令喂给 AstrBot LLM"的环节
-- 历史：C 端最初规划为 Python 终端（fairy-voice-app），M3 联调阶段切换为 Android App（fairy-voice-android），
-  原 fairy-voice-app 本地仓库已删除，其 GitHub 仓库绑定为 fairy-voice-android 的远程（线上历史已由 Android 工程覆盖）
+- 错误仍走原 `response` 帧（ok=false + error）。
+- `stream_begin` 后必须 `stream_end` 收尾；`stream_end` 携带完整文本，C 端以此为准落记忆/历史。
+- 兼容：C 端可要求 v2.0；B 端对旧客户端仍回单帧 response（可选，V1 不实现降级）。
 
-## 里程碑
+## 3. 里程碑
 
-### M1 协议定稿（第 1 周）
-- [x] 设计 fairy-voice 协议 v1.0.0：hello 握手（token + device_id）、心跳、ask 请求/响应
-- [x] 帧格式：`{"type":"ask","id":...,"text":"...","lang":"zh-CN"}` → `{"type":"response","id":...,"ok":true,"data":{"text":"AI回复","audio_hint":true}}`
-- [x] 文档写入 docs/PROTOCOL.md，双端同步
+### S1 B 端流式生成（第 1 周）
+- [ ] `ws_server.py`：ask / voice_ask 处理改为流式推送 stream_begin/delta/end；错误仍走 response 错误帧
+- [ ] `main.py`：`_handle_ask` 改用流式——`context.provider_manager.get_provider_by_id(provider_id)` 直取 Provider，调 `text_chat_stream(...)` 逐 chunk 转发
+- [ ] 记忆适配：`session.add_assistant` 改在 stream_end 时写入完整文本（压缩/轮数逻辑不变）
+- [ ] 工具模式（enable_tools）：V1 保持非流式（tool_loop_agent 完整返回后单帧发）；流式工具循环留 S4
+- [ ] 心跳保活：流式长任务期间刷新 last_seen，防 60s 心跳误杀（承接原 M4-2.1 遗留问题）
+- [ ] `docs/PROTOCOL.md` 更新 v2.0，双端同步
 
-### M2 B 端插件骨架（第 2 周）
-- [x] 仓库根即插件根：metadata.yaml + _conf_schema.json（ws_port / auth_token / heartbeat_timeout）
-- [x] aiohttp WS 服务端：连接管理、token 校验、心跳超时清理（参考 cherry-astrbot/ws_server.py）
-- [x] 核心：收到 ask → 按 device_id 维护内存会话（见记忆策略实现），`llm_generate(contexts=recent)` 带上下文生成 → 回复回写 recent
-- [x] 记忆策略：仅保留最近 3 轮；超 3 轮且 5 分钟内再对话 → LLM 摘要压缩旧记忆注入 system_prompt；超 5 分钟未对话 → 清空记忆重开
-- [x] 进阶：`tool_loop_agent` 工具调用（伪造最小 event，enable_tools 配置开启，默认关，待实机验证）
-- [x] 命令：`/fairy` 查看在线设备与状态
+### S2 C 端流式客户端（第 1~2 周，fairy-voice-android）
+- [ ] `FairyVoiceClient`：`sendAsk` / `sendVoiceAsk` 增加流式回调（onStreamBegin / onStreamDelta / onStreamEnd），内部按 id 聚合；保留非流式兜底
+- [ ] 流结束兜底：stream_end 未到而连接断开 → 以已收 delta 拼接 + 标记「已中断」
+- [ ] `OneBotClient` 冻结为回退（不删除，主流程不再使用）；连接配置切回 fairy-voice 服务器地址/token
 
-### M3 C 端语音终端骨架（第 3 周）—— Android App（fairy-voice-android）
-- [x] Android 工程：Kotlin + OkHttp，WS 客户端（hello 握手 / 心跳 / ask 请求响应 / 断线指数退避重连）
-- [x] 配置：服务器地址 / auth_token / device_id / 心跳间隔 / ask 超时（SharedPreferences 持久化）
-- [x] 前台服务 ConnectionService：常驻 + 通知栏（点击/唤醒按钮拉起主界面）
-- [x] 唤醒入口：无障碍音量键（音量上+下 0.5s）、控制中心磁贴、通知栏唤醒按钮
-- [x] 联调：手动输入指令触发 ask，B 端回复回显（已实机验证：设备 android-phone 上线，问答通）
-- [x] 关键修复记录：动态广播需 RECEIVER_NOT_EXPORTED；ws:// 明文需 usesCleartextTraffic=true；
-      重复 start() 需幂等（防双重连循环）；配置变更需重建 client；UI 状态 2s 轮询自动刷新
+### S3 UI 增量渲染（第 2 周）
+- [ ] `ChatMessage` / `ChatHistory`：支持流式消息（同 id 增量追加文本）
+- [ ] `ChatAdapter`：增量刷新，不整体 notifyDataSetChanged；打字机效果
+- [ ] 悬浮卡/通知：流式文本同步更新（对齐原 M4-1.2 悬浮窗实现，文本增量替换）
 
-### M4 语音闭环（第 4 周）
-- [x] 录音（AudioRecord 16kHz/16bit/单声道 → WAV）← **M4-1 已完成（2026-08-13，C 端 fairy-voice-android）**
-- [x] 唤醒交互修复（磁贴/通知栏点击无反应 → Intent action 驱动；磁贴恒暗态）← **M4-1.1 已完成（2026-08-13）**
-- [ ] **悬浮窗 / 流体云交互**：唤醒后不拉起全屏 App，直接录音并出现悬浮胶囊（录音中/识别中/等待AI），
-      点胶囊展开卡片显示 AI 回复文本；优先 ColorOS 16 Live Updates 接入流体云（无审批），
-      兜底 SYSTEM_ALERT_WINDOW 悬浮窗（小布/Siri 式）← **M4-1.2，计划见 C 端 docs/PLAN_M4_OVERLAY.md（待确认 ColorOS 版本）**
-- [x] 语音识别（voice_ask 协议 v1.1.0，B 端 faster-whisper）← **M4-2 已完成（2026-08-13，实机验收通过：
-      录音 → ASR 识别 → LLM 回复 → App 回显全链路通，B 端 ea3f873 / C 端 c9d6c4b）**
-- [ ] **M4-2.1 稳定性修复与体验**（2026-08-13 计划入档，待开工）：
-  - B：ASR 处理期间保活（刷新心跳，防 60s 超时误杀断连；现 voice_ask 长任务可能被心跳清理）
-  - B：单次识别 30s 超时 → asr_timeout 错误码快速返回，不挂起干等（现首次下载模型可卡数分钟）
-  - B：模型未就绪（下载/加载中）时立即返回「模型加载中，请稍后再试」
-  - B：代理/镜像支持——读取 AstrBot http_proxy 写环境变量 + HF_ENDPOINT 配置项（默认 hf-mirror.com）
-  - C：长回复完整可读——流体云超 50 字截断显示「…点击查看完整回复」；点开悬浮卡片滚动显示全文；
-       卡片「复制」按钮保留可一键复制全文（现长文本被流体云省略号截断看不见）
-  - 验收：连续 10 次语音问答无超时/断开；100+ 字回复流体云不丢内容、点开可看全文
-- [ ] TTS 播报（M4-3）：B 端 edge-tts 合成 mp3 → response.data.audio（base64）一跳下发 → C 端
-      SPEAKING 状态 + MediaPlayer 播放 + 悬浮胶囊「播报中」+ 播完回 IDLE + 再按唤醒打断；
-      配置 tts_enabled / tts_voice（默认 zh-CN-XiaoxiaoNeural）；回退方案 C 端系统 TTS；
-      验收：回复到出声 < 10 秒
-- [ ] 完整链路：触发 → 录音 → 识别 → WS 发送 → AI 回复 → TTS 播报 ← M4-3 完成后闭环
-- [x] 不做连续问答 UI（按一次答一次），AI 侧保留 3 轮内上下文记忆（超出按记忆策略压缩/抛弃）
-- [ ] 状态机与交互收尾（M4-4）：悬浮胶囊/流体云全状态展示（录音中/识别中/等待AI/播报中）；
-      异常提示完善（无语音/未连接/识别失败/模型加载中）；M4 验收标准逐条核对
-- [ ] 唤醒词预留：后续可在录音链路前加轻量唤醒（可选项）
+### S4 收尾（第 2~3 周）
+- [ ] 状态机简化：去掉 SPEAKING/TTS 分支（VoiceController 状态 = IDLE/RECORDING/RECOGNIZING/WAITING_AI），删除 MediaPlayer 与 onTts 相关
+- [ ] 工具模式流式（可选）：tool_loop_agent 的 stream=True 调研后决定
+- [ ] 全量回归：唤醒→录音→本地 ASR→流式上屏全链路；断线重连；3 轮记忆
+- [ ] 双仓库提交，Release 打包验证
 
-### M5 打磨（待 M4 收尾后开工）
-- TTS 语速/音量设置、识别语言切换
-- wss/TLS、Release 签名打包（APK/AAB）
-- 开机自启 / 服务常驻
-- 唤醒词预留（可选）
-
-### M5 打磨与安全（第 5 周）
-- [ ] TTS 语速/音量设置、识别语言切换
-- [ ] token 本地加密存储（EncryptedSharedPreferences）、WS 支持 wss（TLS 部署见 docs/DEPLOY.md）
-- [ ] Android Release 打包（签名 APK / AAB，取代原 PyInstaller exe 方案）
-- [ ] 开机自启 / 服务常驻
-
-## B 端关键技术点（已确认，来自 AstrBot 官方文档）
+## 4. B 端关键技术点
 
 ```python
-# 获取当前会话的 provider
-provider_id = await self.context.get_current_chat_provider_id(umo=event.unified_msg_origin)
-
-# 直接调用 LLM（v4.5.7+）
-llm_resp = await self.context.llm_generate(chat_provider_id=provider_id, prompt="...")
-text = llm_resp.completion_text
-
-# 带工具的 Agent 循环
-resp = await self.context.tool_loop_agent(
-    event=event, chat_provider_id=provider_id,
-    prompt="...", tools=ToolSet([...]), max_steps=30,
-)
+# Context 未暴露流式 API，直取 Provider（llm_generate 内部同源实现）
+prov = await self.context.provider_manager.get_provider_by_id(provider_id)
+async for chunk in prov.text_chat_stream(
+    system_prompt=session.summary,
+    contexts=contexts,
+):
+    # chunk.completion_text 为当前累计文本，取增量发 stream_delta
+    ...
 ```
 
-> 已确认（M2 源码验证）：WS 请求无真实 event，但 `AstrMessageEvent`（ABC 无抽象方法）、`AstrBotMessage()`、`PlatformMetadata(name,desc,id)` 均可无平台构造，插件内伪造最小 event 即可调用 `tool_loop_agent` 完整工具循环；umo = fairy_voice:friend:{device_id}，工具注册表全局共享。
+- 流式 + 记忆：stream_end 的完整文本写入 `session.recent`，避免 delta 拼接脏数据。
+- 心跳保活：流式推送本身即活动，`_handle_ws` 已有 last_seen 刷新逻辑，确认覆盖长任务窗口。
 
-## 记忆策略实现（B 端，按 device_id 维护内存会话）
+## 5. 验收标准
 
-```python
-# session = {"summary": None, "recent": [], "last_active": 0}
-# recent 为最近 <=3 轮消息（1 轮 = user+assistant 2 条）
-if now - session["last_active"] > 300:      # 超 5 分钟 → 抛弃记忆
-    session = {"summary": None, "recent": [], "last_active": now}
+- 500 字回复：首 token 上屏 < 2s（取决于 Provider 首 token 延迟），全程增量无闪跳
+- 流式中断（B 端重启/断网）：C 端 3s 内收尾，已收内容完整可读
+- 记忆：stream_end 后 3 轮记忆正确，压缩/抛弃策略回归通过
+- 无 TTS 残留：状态机无 SPEAKING，无 record 段解析
 
-session["recent"].append({"role": "user", "content": text})
+## 6. 仓库与提交约定
 
-# 超出 3 轮 → 把最早 1 轮压缩进 summary（LLM 摘要）
-if len(session["recent"]) > 6:
-    old = session["recent"][:2]
-    session["summary"] = await llm_generate(prompt=f"把以下对话压缩成要点摘要：{old}")
-    session["recent"] = session["recent"][2:]
-
-resp = await llm_generate(
-    chat_provider_id=... ,
-    system_prompt=session["summary"],  # 压缩记忆注入
-    contexts=session["recent"],         # 最近 3 轮原文
-)
-session["recent"].append({"role": "assistant", "content": resp.completion_text})
-session["last_active"] = now
-```
-
-## 验收标准
-
-- 按热键 → 3 秒内开始录音，识别文本 3 秒内返回
-- WS 断线 15 秒内自动重连，重连后状态同步
-- AI 回复从发送到 TTS 播报 < 10 秒（视模型速度）
-- 常驻挂机内存 < 150MB，空闲 CPU < 1%
-- 超 5 分钟未对话后再次指令，AI 无上一段记忆（验证抛弃逻辑）
-- token 错误握手即断，无明文存储
-
-## 参考
-
-- C 端语音终端：`D:\project\fairy-voice-android`（GitHub: silver-wolf-little-wife/fairy-voice-app）
-- M4-1.2 悬浮窗/流体云计划：`fairy-voice-android/docs/PLAN_M4_OVERLAY.md`
-- 插件架构与 WS 服务端：`D:\project\cherry-astrbot`
-- 协议模式：`cherry-astrbot/docs/PROTOCOL.md`
-- AstrBot 插件 API：`D:\project\AstrBot\docs\zh\dev\star\guides\ai.md`
+- B 端：`D:\project\fairy-voice`（remote: silver-wolf-little-wife/fairy-voice），改动随里程碑提交
+- C 端：`D:\project\fairy-voice-android`（remote: silver-wolf-little-wife/fairy-voice-app），计划见 `docs/PLAN_STREAMING.md`
+- 上游 AstrBot 源码：`D:\project\AstrBot`（只读参考，本方案不修改上游）
