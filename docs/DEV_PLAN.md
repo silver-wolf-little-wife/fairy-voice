@@ -10,7 +10,7 @@
 - **砍 TTS**：M4-3 不再实施。纯文字增量渲染（打字机效果），响应感更强、链路更短。
 - **流式语义**：B 端 `Provider.text_chat_stream`（上游 AstrBot 已实现，OpenAI/Gemini/Anthropic 源均支持）逐 token 转发为 `stream_delta` 帧。
 
-## 2. 协议 v2.0 变更（同步更新 docs/PROTOCOL.md）
+## 2. 协议 v2.0 变更（docs/PROTOCOL.md 已更新）
 
 新增三类帧（C→B 的 ask / voice_ask 不变）：
 
@@ -27,13 +27,13 @@ B → C: {"type": "stream_end",   "id": "<uuid>", "ok": true,
 
 ## 3. 里程碑
 
-### S1 B 端流式生成（第 1 周）
-- [ ] `ws_server.py`：ask / voice_ask 处理改为流式推送 stream_begin/delta/end；错误仍走 response 错误帧
-- [ ] `main.py`：`_handle_ask` 改用流式——`context.provider_manager.get_provider_by_id(provider_id)` 直取 Provider，调 `text_chat_stream(...)` 逐 chunk 转发
-- [ ] 记忆适配：`session.add_assistant` 改在 stream_end 时写入完整文本（压缩/轮数逻辑不变）
-- [ ] 工具模式（enable_tools）：V1 保持非流式（tool_loop_agent 完整返回后单帧发）；流式工具循环留 S4
-- [ ] 心跳保活：流式长任务期间刷新 last_seen，防 60s 心跳误杀（承接原 M4-2.1 遗留问题）
-- [ ] `docs/PROTOCOL.md` 更新 v2.0，双端同步
+### S1 B 端流式生成（✅ 已完成 2026-08-17，commit d5e3026）
+- [x] `ws_server.py`：ask / voice_ask 处理改为流式推送 stream_begin/delta/end；错误仍走 response 错误帧
+- [x] `main.py`：`_handle_ask` 改用流式——`context.provider_manager.get_provider_by_id(provider_id)` 直取 Provider，调 `text_chat_stream(...)` 逐 chunk 转发（deltas.split_delta 兼容增量/快照两种 chunk 语义）
+- [x] 记忆适配：`session.add_assistant` 改在 stream_end 时写入完整文本（压缩/轮数逻辑不变）
+- [x] 工具模式（enable_tools）：V1 保持非流式（tool_loop_agent 完整返回后单次 yield）
+- [x] 心跳保活：核实无需改动——B 端 last_seen 在收到任何 C 帧（含 ping）时刷新，流式期间 C 持续收 delta 也不会误断
+- [x] `docs/PROTOCOL.md` 更新 v2.0（stream_begin/delta/end + 错误语义 + server_version 0.2.0）
 
 ### S2 C 端流式客户端（第 1~2 周，fairy-voice-android）
 - [ ] `FairyVoiceClient`：`sendAsk` / `sendVoiceAsk` 增加流式回调（onStreamBegin / onStreamDelta / onStreamEnd），内部按 id 聚合；保留非流式兜底
@@ -60,8 +60,10 @@ async for chunk in prov.text_chat_stream(
     system_prompt=session.summary,
     contexts=contexts,
 ):
-    # chunk.completion_text 为当前累计文本，取增量发 stream_delta
-    ...
+    # chunk.completion_text 语义不统一：增量片段 或 累计快照（流末尾回一次完整结果）
+    delta, full = split_delta(full, chunk.completion_text or "")
+    if delta:
+        yield delta
 ```
 
 - 流式 + 记忆：stream_end 的完整文本写入 `session.recent`，避免 delta 拼接脏数据。
