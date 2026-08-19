@@ -3,9 +3,10 @@
 
 B 端：
 - 内嵌 aiohttp WebSocket 服务端，接受手机 App（fairy-voice-app）主动外连。
-- 收到 ask / voice_ask（语音指令）后按 device_id 记忆策略（3 轮 + 5 分钟压缩/抛弃）组装上下文，
-  调用 AstrBot LLM（Provider.text_chat_stream 流式 / tool_loop_agent 非流式）→ 流式回传 AI 回复。
+- 收到 ask 后按 device_id 记忆策略（3 轮 + 5 分钟压缩/抛弃）组装上下文，
+  调用 AstrBot LLM（Provider.text_chat_stream 流式 / tool_loop_agent 流式）→ 流式回传 AI 回复。
 - 协议 v2.0（docs/PROTOCOL.md）：stream_begin / stream_delta / stream_end，无 TTS。
+- ASR 已移至 C 端（sherpa-onnx 本地识别），voice_ask 已弃用。
 
 会话与工具：
 - 每个 device_id 是独立会话（B 端内存记忆），不绑定真实聊天，umo = fairy_voice:friend:{device_id}。

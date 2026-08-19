@@ -9,7 +9,7 @@
 - **传输**：WebSocket（生产环境建议 wss/TLS）。
 - **方向**：C 端（手机）**主动外连** B 端（AstrBot 插件服务端，穿透家庭 NAT），B 永不主动连 C。
 - **帧格式**：UTF-8 JSON 文本帧。
-- **角色**：C = 语音采集与文字展示终端（录音/ASR 文本展示），B = AI 大脑（ASR 识别 + LLM 流式生成 + 记忆管理）。
+- **角色**：C = 语音采集与本地识别终端（录音 + sherpa-onnx ASR + 文本展示），B = AI 大脑（LLM 流式生成 + 记忆管理 + 工具调用）。
 - **协议风格**：JSON-RPC 风格，请求/响应以 `id` 关联；流式响应以 `stream_begin` 开始、`stream_end` 结束。
 
 ## 2. 连接握手
@@ -80,7 +80,8 @@ B 收到 ask 后，按序发送三类帧，同一 `id` 关联：
   - `ok: true`：正常完成，`data.text` 为完整回复（C 端以此为准落历史/记忆，可修复丢帧）。
   - `ok: false`：流中途失败，`error` 结构与 v1.1.0 response 错误一致（见 §6）。
 - **错误语义**：
-  - 请求校验失败（空文本/空音频/坏音频/ASR 不可用）：**未发 stream_begin**，直接回 v1.1.0 单帧 response（ok=false）。
+  - 请求校验失败（空文本）：**未发 stream_begin**，直接回 v1.1.0 单帧 response（ok=false）。
+  - voice_ask 已弃用：直接回 `asr_unavailable` 错误码。
   - 生成中途失败（LLM 错误/超时）：已发 stream_begin，回 `stream_end` 且 `ok:false` + `error`。
 - 超时：流式生成同样受 `ask_timeout` 约束，C 端超时未收到 stream_end 可视为失败并断开重连。
 

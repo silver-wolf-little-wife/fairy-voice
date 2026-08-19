@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""ws_server.py 端到端冒烟测试（协议 v2.0 流式）：hello 握手 / ping / ask / voice_ask / 流式全流程。"""
+"""ws_server.py 端到端冒烟测试（协议 v2.0 流式）：hello 握手 / ping / ask / 流式全流程 / voice_ask 弃用。"""
 
 import asyncio
-import base64
 import sys
 import uuid
 from pathlib import Path
@@ -36,13 +35,6 @@ async def _boom_stream(device_id: str, text: str):
     raise RuntimeError("boom")
 
 
-async def fake_asr_fn(wav_bytes: bytes, lang: str) -> str:
-    # 模拟识别：静音无内容返回空，其余返回固定文本
-    if len(wav_bytes) < 100:
-        return ""
-    return "明天天气怎么样"
-
-
 async def _recv_stream(ws, expect_begin_recognized=None) -> dict:
     """收取一轮完整流式响应，返回 {recognized, deltas, end}。"""
     first = await ws.receive_json()
@@ -66,7 +58,6 @@ async def main() -> None:
         heartbeat_timeout=60,
         ask_handler=fake_ask_handler,
         ask_stream_handler=fake_ask_stream_handler,
-        asr_fn=fake_asr_fn,
     )
     await server.start()
     try:
@@ -121,41 +112,16 @@ async def main() -> None:
                 print("PASS 流中异常 → stream_end(ok:false, llm_error)")
                 server.ask_stream_handler = fake_ask_stream_handler
 
-                # 7) voice_ask 流式：begin 携带 recognized → delta → end
-                req_id = str(uuid.uuid4())
-                wav = b"\x00" * 800  # 模拟 16kHz WAV 数据（fake_asr_fn 返回文本）
+                # 7) voice_ask 已弃用：返回 asr_unavailable 错误码
                 await ws.send_json(
-                    {"type": "voice_ask", "id": req_id, "audio": base64.b64encode(wav).decode(), "lang": "zh-CN"}
-                )
-                got = await _recv_stream(ws, expect_begin_recognized="明天天气怎么样")
-                assert got["end"]["ok"] is True, got["end"]
-                assert got["end"]["data"]["text"] == "你好，世界！", got["end"]
-                print("PASS voice_ask 流式（recognized 携带 + 完整文本）")
-
-                # 8) voice_ask：识别结果为空 → empty_text（单帧 response）
-                await ws.send_json(
-                    {"type": "voice_ask", "id": str(uuid.uuid4()), "audio": base64.b64encode(b"x" * 3).decode()}
+                    {"type": "voice_ask", "id": str(uuid.uuid4()), "audio": "dGVzdA==", "lang": "zh-CN"}
                 )
                 resp = await ws.receive_json()
                 assert resp["type"] == "response" and resp["ok"] is False, resp
-                assert resp["error"]["code"] == "empty_text", resp
-                print("PASS voice_ask 无内容 → empty_text")
+                assert resp["error"]["code"] == "asr_unavailable", resp
+                print("PASS voice_ask 已弃用 → asr_unavailable")
 
-                # 9) voice_ask：audio 为空 → empty_audio
-                await ws.send_json({"type": "voice_ask", "id": str(uuid.uuid4()), "audio": ""})
-                resp = await ws.receive_json()
-                assert resp["type"] == "response" and resp["ok"] is False, resp
-                assert resp["error"]["code"] == "empty_audio", resp
-                print("PASS voice_ask 空音频 → empty_audio")
-
-                # 10) voice_ask：base64 非法 → bad_audio
-                await ws.send_json({"type": "voice_ask", "id": str(uuid.uuid4()), "audio": "!!!not-base64!!!"})
-                resp = await ws.receive_json()
-                assert resp["type"] == "response" and resp["ok"] is False, resp
-                assert resp["error"]["code"] == "bad_audio", resp
-                print("PASS voice_ask 坏音频 → bad_audio")
-
-                # 11) 连接存活时设备列表应包含本机
+                # 8) 连接存活时设备列表应包含本机
                 devs = server.device_summary()
                 assert any(d["device_id"] == "phone-1" for d in devs), devs
                 print("PASS device_summary")
@@ -171,7 +137,6 @@ async def legacy_main() -> None:
         token=TOKEN,
         heartbeat_timeout=60,
         ask_handler=fake_ask_handler,
-        asr_fn=fake_asr_fn,
     )
     await server.start()
     try:

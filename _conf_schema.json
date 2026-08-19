@@ -40,17 +40,5 @@
     "description": "工具循环最大步数",
     "default": 10,
     "hint": "防止工具循环失控"
-  },
-  "asr_model": {
-    "type": "string",
-    "description": "语音识别 Whisper 模型大小（tiny/base/small），首次识别自动下载",
-    "default": "tiny",
-    "hint": "tiny 快但准确率一般；base 均衡；small 最准但慢、占内存"
-  },
-  "asr_lang": {
-    "type": "string",
-    "description": "语音识别语言（ISO 639-1 或 zh-CN/en 形式）",
-    "default": "zh-CN",
-    "hint": "与 C 端 voice_ask 的 lang 参数一致"
   }
 }
