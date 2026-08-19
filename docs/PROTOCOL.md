@@ -49,28 +49,32 @@ B 响应：
 {"type": "ask", "id": "<uuid>", "text": "帮我查一下明天的天气", "lang": "zh-CN"}
 ```
 
-### 4.2 语音指令 voice_ask
+### 4.2 语音指令 voice_ask（已弃用）
+
+> **已弃用**：ASR 已移至 C 端（sherpa-onnx 本地识别），C 端应直接发 ask 文本帧。
+> B 端收到 voice_ask 会返回 `asr_unavailable` 错误码。
 
 ```json
 {"type": "voice_ask", "id": "<uuid>", "audio": "<WAV 文件 base64>", "lang": "zh-CN"}
 ```
 
 - `audio`：16kHz / 16bit / 单声道 WAV 录音的 base64，必填，非空。
-- B 端流程：ASR 识别 → 走与 ask 相同的记忆/LLM 链路 → 流式响应，`stream_begin` 携带 `recognized`。
-- ASR 依赖未安装或未初始化时返回 `asr_unavailable`；音频解码失败返回 `bad_audio`。
+- B 端流程：~~ASR 识别 → 走与 ask 相同的记忆/LLM 链路 → 流式响应，`stream_begin` 携带 `recognized`~~。
+- B 端返回 `asr_unavailable` 错误码，提示 C 端使用本地 ASR 后发 ask。
 
 ## 5. 流式响应（B → C，v2.0）
 
-B 收到 ask / voice_ask 后，按序发送三类帧，同一 `id` 关联：
+B 收到 ask 后，按序发送三类帧，同一 `id` 关联：
 
 ```json
-{"type": "stream_begin", "id": "<uuid>", "recognized": "识别文本(voice_ask 时非空，ask 为 null)"}
+{"type": "stream_begin", "id": "<uuid>", "recognized": null}
 {"type": "stream_delta", "id": "<uuid>", "delta": "增量文本片段"}
 ...
 {"type": "stream_end", "id": "<uuid>", "ok": true, "data": {"text": "完整回复文本"}}
 ```
 
 - `stream_begin`：流开始，标志该 id 进入流式状态。**必须先于任何 delta**。
+- `recognized`：始终为 `null`（ASR 已移至 C 端，B 端不再做识别）。
 - `stream_delta`：增量文本，C 端直接追加展示；`delta` 非空。
 - `stream_end`：流结束。
   - `ok: true`：正常完成，`data.text` 为完整回复（C 端以此为准落历史/记忆，可修复丢帧）。
@@ -86,10 +90,10 @@ B 收到 ask / voice_ask 后，按序发送三类帧，同一 `id` 关联：
 |---|---|
 | `invalid_token` | 认证 token 错误 |
 | `missing_device_id` | 缺少设备标识 |
-| `empty_text` | ask 的 text 为空 / voice_ask 未识别到内容 |
-| `empty_audio` | voice_ask 的 audio 为空 |
-| `bad_audio` | voice_ask 音频 base64 解码失败 |
-| `asr_unavailable` | ASR 未初始化/依赖缺失 |
+| `empty_text` | ask 的 text 为空 |
+| `empty_audio` | ~~voice_ask 的 audio 为空~~（已弃用） |
+| `bad_audio` | ~~voice_ask 音频 base64 解码失败~~（已弃用） |
+| `asr_unavailable` | ASR 已移至 C 端，voice_ask 已弃用 |
 | `busy` | 设备已有 ask 在处理 |
 | `provider_not_found` | 未配置可用 LLM Provider |
 | `llm_error` | LLM 生成失败（含流式中途失败） |

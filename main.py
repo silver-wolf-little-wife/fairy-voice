@@ -45,7 +45,6 @@ except ImportError:  # pragma: no cover —— 兼容旧版本
     ToolSet = None  # type: ignore
     Provider = None  # type: ignore
 
-from .asr import WhisperASR
 from .deltas import split_delta
 from .memory import ROLE_ASSISTANT, ROLE_USER, MemoryManager
 from .ws_server import FairyWsServer
@@ -77,10 +76,6 @@ class FairyVoice(Star):
         )
         self._enable_tools = bool(config.get("enable_tools", False))
         self._tool_max_steps = int(config.get("tool_max_steps", 10))
-        # M4-2：ASR 语音识别（faster-whisper 懒加载，首次识别才下载模型）
-        self._asr_model = str(config.get("asr_model", "tiny"))
-        self._asr_lang = str(config.get("asr_lang", "zh-CN"))
-        self._asr = WhisperASR(model=self._asr_model)
 
     async def initialize(self) -> None:
         """启动 WebSocket 服务端。"""
@@ -94,16 +89,9 @@ class FairyVoice(Star):
             heartbeat_timeout=heartbeat_timeout,
             ask_handler=self._handle_ask,
             ask_stream_handler=self._handle_ask_stream,
-            asr_fn=self._handle_asr,
         )
         self._server_task = asyncio.create_task(self.server.start())
         logger.info("Fairy Voice 插件初始化完成（协议 v2.0 流式）")
-
-    # ---------- ASR（M4-2） ----------
-
-    async def _handle_asr(self, wav_bytes: bytes, lang: str) -> str:
-        """语音识别入口：懒加载模型，返回识别文本。"""
-        return await self._asr.recognize(wav_bytes, lang or self._asr_lang)
 
     # ---------- ask 处理核心（v2.0 流式） ----------
 
