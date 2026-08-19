@@ -1,57 +1,49 @@
 # fairy-voice
 
-> # ⛔ 本仓库已弃用并归档（2026-08-14）
->
-> **项目现状**：fairy-voice 语音助手的 C 端（Android）已改为**直连 AstrBot 的 OneBot V11 适配器（aiocqhttp） + 本地 ASR（sherpa-onnx）**，不再需要本自研 B 端插件。
-> - C 端采用 OneBot 11 反向 WS（universal 单连接）上报语音指令文本，走 AstrBot 原生 LLM/工具/会话链路
-> - ASR 从本插件（faster-whisper）**迁移至 C 端本地**（sherpa-onnx + paraformer-zh）
-> - 本仓库代码**保留作参考与回退通道**，不再维护，新增开发请移步：
->   - C 端仓库：[fairy-voice-app](https://github.com/silver-wolf-little-wife/fairy-voice-app)（即本地 `fairy-voice-android`）
->   - 新方案计划：C 端 `docs/PLAN_ONEBOT_MIGRATION.md`
->
-> 以下为归档前的原始说明（历史参考）。
+fairy-voice 语音助手的 **B 端 AstrBot 插件**（仓库根即插件根）。
 
-> 双仓库协作项目：语音助手接入 AstrBot。本仓库 = **B 端 AstrBot 插件**（仓库根即插件根）。
+协议 v2.0 流式输出，配合 C 端 [fairy-voice-app](https://github.com/silver-wolf-little-wife/fairy-voice-app) 使用。
+ASR 已移至 C 端本地（sherpa-onnx），B 端只处理 LLM 流式生成与工具调用。
 
 ## 架构
 
 ```
-[本机 fairy-voice-android]  --WebSocket-->  [B端 AstrBot 插件 fairy-voice]
-     磁贴/音量键触发录音/识别                 LLM 生成 / Agent 工具循环
-     TTS 播报  <--AI 回复--  (llm_generate / tool_loop_agent)
+C 端（Android）                    B 端（本仓库，AstrBot 插件）
+FairyVoiceClient                   FairyWsServer
+  ask 帧 ──────────────────────▶     ↓ 记忆策略 + Provider.text_chat_stream
+                                       ↓ 工具循环（tool_loop_agent）
+  stream_begin ◀────────────────     ↓ 流式推送
+  stream_delta ◀────────────────     ↓ 逐增量
+  stream_delta ◀────────────────     ↓
+  stream_end ◀──────────────────     ↓ 完整文本兜底
 ```
-
-- **C 端**：[fairy-voice-android](https://github.com/silver-wolf-little-wife/fairy-voice-app)（独立仓库，Android 语音终端，接管原 fairy-voice-app 仓库），录音/识别/TTS，主动外连 B 端（穿透 NAT）
-- **B 端**：本仓库（AstrBot 插件），内嵌 WebSocket 服务端，接收语音指令文本，调用 AstrBot LLM/Agent 处理，回传结果
-- **协议**：见 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)，双端共享，保持同步
 
 ## 目录
 
 ```
 fairy-voice/                  ← 仓库根 = 插件根（插件名 astrbot_plugin_fairy_voice）
 ├─ __init__.py                插件入口（FairyVoice Star）
-├─ main.py                    主逻辑：LLM 生成 / Agent 工具循环 / 记忆策略
-├─ ws_server.py               aiohttp WebSocket 服务端（hello/心跳/ask）
+├─ main.py                    主逻辑：LLM 流式生成 / Agent 工具循环 / 记忆策略
+├─ ws_server.py               aiohttp WebSocket 服务端（hello/心跳/ask/流式推送）
 ├─ memory.py                  3 轮 + 5 分钟记忆策略
-├─ metadata.yaml              插件元数据
-├─ _conf_schema.json          配置项定义
-├─ docs/                      协议与开发计划
-└─ tests/                     单元测试与 WS 冒烟测试
+├─ deltas.py                  流式增量切割（兼容增量片段与累计快照两种 Provider 语义）
+├─ docs/                      协议与计划文档
+└─ tests/                     单元测试
 ```
 
-## 安装（B 端插件）
+## 安装
 
-1. 克隆本仓库，将**仓库内容**放入 AstrBot 的 `data/plugins/astrbot_plugin_fairy_voice/`（或直接以目录名 `astrbot_plugin_fairy_voice` clone）
+1. 克隆本仓库，将**仓库内容**放入 AstrBot 的 `data/plugins/astrbot_plugin_fairy_voice/`
 2. 重启 AstrBot 或重载插件，在插件配置中设置：
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `ws_port` | 8766 | WebSocket 服务端口 |
-| `auth_token` | change-me | 握手认证 token（C 端 App 需配置相同值） |
+| `auth_token` | change-me | 握手认证 token（C 端需配相同值） |
 | `heartbeat_timeout` | 60 | 心跳超时（秒），超时清理设备与记忆 |
 | `memory_ttl` | 300 | 记忆保留时长（秒），超过抛弃全部记忆 |
 | `memory_rounds` | 3 | 保留最近对话轮数，超出后最早轮次压缩为摘要 |
-| `enable_tools` | false | 启用工具调用（tool_loop_agent），实机验证后建议开启 |
+| `enable_tools` | false | 启用工具调用（流式 tool_loop_agent） |
 | `tool_max_steps` | 10 | 工具循环最大步数 |
 
 3. 发送 `/fairy` 可查看在线设备与记忆状态
@@ -61,20 +53,21 @@ fairy-voice/                  ← 仓库根 = 插件根（插件名 astrbot_plug
 - 仅保留最近 3 轮对话原文
 - 超出 3 轮且 5 分钟内再次对话：最早轮次交给 LLM 压缩为摘要（注入 system_prompt）
 - 超过 5 分钟未对话：抛弃全部记忆，视为新会话
+- 记忆只存内存，B 端重启即清空
+- assistant 原文以 `stream_end` 的完整文本写入，不采用 delta 拼接
 
 ## 测试
 
 ```bash
 python tests/test_memory.py    # 记忆策略
-python tests/test_ws_smoke.py  # WS 冒烟（本地起服，握手/心跳/ask 往返）
+python tests/test_ws_smoke.py  # WS 冒烟（握手/心跳/ask 流式往返）
 ```
 
-## 状态
+## 协议
 
-- ✅ M1 协议定稿（`docs/PROTOCOL.md` v1.0.0）
-- ✅ M2 B 端插件骨架（WS 服务端 / 记忆策略 / LLM 接入 / 工具调用支持）
-- ✅ M3 C 端语音终端骨架（Android App，连接/唤醒/联调已实机验证）
-- ⬜ M4 语音闭环（录音 / 识别 / TTS）
-- ⬜ M5 打磨与安全
+见 [`docs/PROTOCOL.md`](docs/PROTOCOL.md)。v2.0 流式：stream_begin / stream_delta / stream_end，无 TTS。
+voice_ask 已弃用（ASR 已移至 C 端），C 端应直接发 ask 文本帧。
 
-开发计划见 [`docs/DEV_PLAN.md`](docs/DEV_PLAN.md)。
+## 许可
+
+AGPL-3.0-only
