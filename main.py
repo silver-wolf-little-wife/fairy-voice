@@ -138,16 +138,49 @@ class FairyVoice(Star):
 
         full = ""
         if self._enable_tools and ToolSet is not None:
-            resp = await self.context.tool_loop_agent(
-                event=event,
-                chat_provider_id=provider_id,
-                contexts=contexts,
-                tools=self._all_tools(),
-                max_steps=self._tool_max_steps,
+            # 工具模式：直接迭代 step_until_done 获得流式增量
+            # （tool_loop_agent 吞掉了流式增量，只返回最终结果）
+            from astrbot.core.astr_agent_context import AgentContextWrapper, AstrAgentContext
+            from astrbot.core.astr_agent_tool_exec import FunctionToolExecutor
+            from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
+            from astrbot.core.provider.entities import ProviderRequest
+
+            prov = await self.context.provider_manager.get_provider_by_id(provider_id)
+            if prov is None:
+                raise RuntimeError(f"Provider {provider_id} not found")
+
+            agent_runner = ToolLoopAgentRunner()
+            tool_executor = FunctionToolExecutor()
+            agent_context = AstrAgentContext(context=self, event=event)
+
+            request = ProviderRequest(
+                prompt=text,
+                func_tool=self._all_tools(),
+                contexts=[m.model_dump() if hasattr(m, 'model_dump') else m for m in contexts],
+                system_prompt=session.summary or "",
             )
-            full = resp.completion_text
-            if full:
-                yield full
+
+            await agent_runner.reset(
+                provider=prov,
+                request=request,
+                run_context=AgentContextWrapper(
+                    context=agent_context,
+                    tool_call_timeout=120,
+                ),
+                tool_executor=tool_executor,
+                streaming=True,  # 启用流式
+            )
+
+            async for response in agent_runner.step_until_done(self._tool_max_steps):
+                if response.type == "streaming_delta" and response.data and response.data.chain:
+                    # 提取增量文本
+                    delta_text = ""
+                    for seg in response.data.chain.chain:
+                        if hasattr(seg, 'text') and seg.text:
+                            delta_text += seg.text
+                    if delta_text:
+                        full += delta_text
+                        yield delta_text
         else:
             prov = await self.context.provider_manager.get_provider_by_id(provider_id)
             if prov is None or not self._provider_supports_stream(prov):
