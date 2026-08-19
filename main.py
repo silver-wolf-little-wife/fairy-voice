@@ -164,12 +164,8 @@ class FairyVoice(Star):
             )
 
             async for response in agent_runner.step_until_done(self._tool_max_steps):
-                if response.type == "streaming_delta" and response.data and response.data.chain:
-                    # 提取增量文本
-                    delta_text = ""
-                    for seg in response.data.chain.chain:
-                        if hasattr(seg, 'text') and seg.text:
-                            delta_text += seg.text
+                if response.type == "streaming_delta":
+                    delta_text = self._extract_delta_text(response)
                     if delta_text:
                         full += delta_text
                         yield delta_text
@@ -194,6 +190,31 @@ class FairyVoice(Star):
                     if delta:
                         yield delta
         session.add_assistant(full)
+
+    @staticmethod
+    def _extract_delta_text(response) -> str:
+        """从 ToolLoopAgentRunner 的 streaming_delta 响应中提取增量文本。
+
+        AgentResponse.data 是 TypedDict（运行时是 dict），chain 是 MessageChain 对象，
+        其 chain 字段是 BaseMessageComponent 列表（组件有 text 属性）。
+        兼容：data 为空 / chain 缺失 / 组件无 text 的各类响应（agent_stats、tool_call 等）。
+        """
+        try:
+            data = response.data
+            if not data:
+                return ""
+            chain = data.get("chain") if isinstance(data, dict) else getattr(data, "chain", None)
+            if chain is None:
+                return ""
+            parts = chain.chain if hasattr(chain, "chain") else chain
+            text = ""
+            for seg in parts:
+                seg_text = getattr(seg, "text", None)
+                if seg_text:
+                    text += seg_text
+            return text
+        except Exception:  # noqa: BLE001 —— 解析失败不影响链路，返回空增量
+            return ""
 
     async def _handle_ask(self, device_id: str, text: str) -> str:
         """非流式兜底：记忆策略 → LLM 生成（可选工具循环）→ 回写记忆。
