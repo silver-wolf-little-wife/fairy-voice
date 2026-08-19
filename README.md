@@ -45,6 +45,8 @@ fairy-voice/                  ← 仓库根 = 插件根（插件名 astrbot_plug
 | `memory_rounds` | 3 | 保留最近对话轮数，超出后最早轮次压缩为摘要 |
 | `enable_tools` | false | 启用工具调用（流式 tool_loop_agent） |
 | `tool_max_steps` | 10 | 工具循环最大步数 |
+| `share_persona` | false | 共享 AstrBot Persona 人设 prompt（注入 system_prompt），让语音对话遵循 AstrBot 人设 |
+| `persona_id` | 空 | 指定 Persona 名称（按 name）；留空用 AstrBot 默认人设 |
 
 3. 发送 `/fairy` 可查看在线设备与记忆状态
 

@@ -40,5 +40,17 @@
     "description": "工具循环最大步数",
     "default": 10,
     "hint": "防止工具循环失控"
+  },
+  "share_persona": {
+    "type": "bool",
+    "description": "共享 AstrBot Persona 人设 prompt（注入 system_prompt），让语音对话使用与 AstrBot 一致的人设",
+    "default": false,
+    "hint": "开启后 Fairy 会遵循 AstrBot 配置的人设"
+  },
+  "persona_id": {
+    "type": "string",
+    "description": "指定使用的 Persona 名称（按 name 匹配）；留空则用 AstrBot 默认人设（default_personality）",
+    "default": "",
+    "hint": "例如 default，或你自建人设的名称"
   }
 }

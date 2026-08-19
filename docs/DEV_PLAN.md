@@ -47,9 +47,15 @@ B → C: {"type": "stream_end",   "id": "<uuid>", "ok": true,
 
 ### S4 收尾（第 2~3 周）
 - [ ] 状态机简化：去掉 SPEAKING/TTS 分支（VoiceController 状态 = IDLE/RECORDING/RECOGNIZING/WAITING_AI），删除 MediaPlayer 与 onTts 相关
-- [ ] 工具模式流式（可选）：tool_loop_agent 的 stream=True 调研后决定
+- [x] 工具模式流式：直接迭代 ToolLoopAgentRunner.step_until_done 提取 streaming_delta（跳过 reasoning）
 - [ ] 全量回归：唤醒→录音→本地 ASR→流式上屏全链路；断线重连；3 轮记忆
 - [ ] 双仓库提交，Release 打包验证
+
+### 共享 Persona prompt（✅ 已完成 2026-08-17）
+- [x] `_build_system_prompt`：共享 AstrBot Persona 人设 prompt + 记忆摘要合并为 system_prompt
+- [x] 配置项 `share_persona` / `persona_id`（`_conf_schema.json`）
+- [x] 注入三条链路：工具模式 ProviderRequest / 非工具 text_chat_stream / 非流式 llm_generate
+- [x] 人设缺失/获取失败降级为纯记忆摘要，不阻断对话
 
 ## 4. B 端关键技术点
 

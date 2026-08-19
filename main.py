@@ -77,6 +77,9 @@ class FairyVoice(Star):
         )
         self._enable_tools = bool(config.get("enable_tools", False))
         self._tool_max_steps = int(config.get("tool_max_steps", 10))
+        # 共享 Persona prompt（AstrBot 人设）
+        self._share_persona = bool(config.get("share_persona", False))
+        self._persona_id = str(config.get("persona_id", "") or "").strip()
 
     async def initialize(self) -> None:
         """启动 WebSocket 服务端。"""
@@ -95,6 +98,32 @@ class FairyVoice(Star):
         logger.info("Fairy Voice 插件初始化完成（协议 v2.0 流式）")
 
     # ---------- ask 处理核心（v2.0 流式） ----------
+
+    async def _build_system_prompt(self, session, event) -> str:
+        """组装 system_prompt：共享 Persona prompt（可选）+ 记忆摘要。
+
+        未启用 share_persona → 仅记忆摘要（原行为）。
+        启用后：优先用配置的 persona_id，空则用 AstrBot 默认人设（default_personality）；
+        人设缺失/获取失败 → 降级为纯记忆摘要，不阻断对话。
+        """
+        summary = session.summary or ""
+        if not self._share_persona:
+            return summary
+        try:
+            persona = None
+            if self._persona_id:
+                persona = self.context.persona_manager.get_persona_v3_by_id(self._persona_id)
+            if persona is None:
+                persona = await self.context.persona_manager.get_default_persona_v3(
+                    event.unified_msg_origin
+                )
+            prompt = (persona.get("prompt") or "").strip() if persona else ""
+        except Exception as e:  # noqa: BLE001 —— 人设获取失败不阻断对话
+            logger.warning(f"共享 persona 获取失败（降级为记忆摘要）: {e}")
+            return summary
+        if not prompt:
+            return summary
+        return f"{prompt}\n\n{summary}".strip()
 
     async def _handle_ask_stream(self, device_id: str, text: str):
         """流式 ask：记忆策略 → Provider.text_chat_stream 逐增量 yield → 回写记忆。
@@ -124,6 +153,7 @@ class FairyVoice(Star):
         contexts = [
             self._build_message(m["role"], m["content"]) for m in session.recent
         ]
+        system_prompt = await self._build_system_prompt(session, event)
 
         full = ""
         if self._enable_tools and ToolSet is not None:
@@ -148,7 +178,7 @@ class FairyVoice(Star):
                 prompt=text,
                 func_tool=self._all_tools(),
                 contexts=[m.model_dump() if hasattr(m, 'model_dump') else m for m in contexts],
-                system_prompt=session.summary or "",
+                system_prompt=system_prompt,
             )
 
             await agent_runner.reset(
@@ -175,7 +205,7 @@ class FairyVoice(Star):
                 # 降级：非流式 Provider（基类未实现 text_chat_stream）
                 resp = await self.context.llm_generate(
                     chat_provider_id=provider_id,
-                    system_prompt=session.summary,
+                    system_prompt=system_prompt,
                     contexts=contexts,
                 )
                 full = resp.completion_text
@@ -183,7 +213,7 @@ class FairyVoice(Star):
                     yield full
             else:
                 async for chunk in prov.text_chat_stream(
-                    system_prompt=session.summary,
+                    system_prompt=system_prompt,
                     contexts=contexts,
                 ):
                     delta, full = split_delta(full, chunk.completion_text or "")
@@ -248,6 +278,7 @@ class FairyVoice(Star):
         contexts = [
             self._build_message(m["role"], m["content"]) for m in session.recent
         ]
+        system_prompt = await self._build_system_prompt(session, event)
 
         if self._enable_tools and ToolSet is not None:
             resp = await self.context.tool_loop_agent(
@@ -255,12 +286,13 @@ class FairyVoice(Star):
                 chat_provider_id=provider_id,
                 contexts=contexts,
                 tools=self._all_tools(),
+                system_prompt=system_prompt,
                 max_steps=self._tool_max_steps,
             )
         else:
             resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
-                system_prompt=session.summary,
+                system_prompt=system_prompt,
                 contexts=contexts,
             )
         reply = resp.completion_text
