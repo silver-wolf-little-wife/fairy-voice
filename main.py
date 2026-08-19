@@ -129,6 +129,7 @@ class FairyVoice(Star):
         if self._enable_tools and ToolSet is not None:
             # 工具模式：直接迭代 step_until_done 获得流式增量
             # （tool_loop_agent 吞掉了流式增量，只返回最终结果）
+            from astrbot.core.agent.hooks import BaseAgentRunHooks
             from astrbot.core.astr_agent_context import AgentContextWrapper, AstrAgentContext
             from astrbot.core.astr_agent_tool_exec import FunctionToolExecutor
             from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
@@ -158,6 +159,7 @@ class FairyVoice(Star):
                     tool_call_timeout=120,
                 ),
                 tool_executor=tool_executor,
+                agent_hooks=BaseAgentRunHooks[AstrAgentContext](),
                 streaming=True,  # 启用流式
             )
 
