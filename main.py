@@ -140,7 +140,8 @@ class FairyVoice(Star):
 
             agent_runner = ToolLoopAgentRunner()
             tool_executor = FunctionToolExecutor()
-            agent_context = AstrAgentContext(context=self, event=event)
+            # context 字段需要 Context 实例（插件里是 self.context，Star 构造时注入），不能传 self（FairyVoice）
+            agent_context = AstrAgentContext(context=self.context, event=event)
 
             request = ProviderRequest(
                 prompt=text,
