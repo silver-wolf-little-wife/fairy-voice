@@ -180,6 +180,8 @@ class FairyVoice(Star):
                 contexts=[m.model_dump() if hasattr(m, 'model_dump') else m for m in contexts],
                 system_prompt=system_prompt,
             )
+            # 按 AstrBot 配置注入 web_search 工具（provider_settings.web_search + websearch_provider）
+            await self._apply_web_search(event, request)
 
             await agent_runner.reset(
                 provider=prov,
@@ -351,14 +353,64 @@ class FairyVoice(Star):
         return cls(content=[TextPart(text=content)])
 
     def _all_tools(self) -> ToolSet | None:
-        """收集全局注册的全部工具（插件工具 + MCP + 内置工具）。"""
+        """收集全局注册的全部工具（插件工具 + MCP）。
+
+        对齐 AstrBot 主流程 get_full_tool_set()：只取 func_list（用户/插件/MCP 注册的工具），
+        不直接暴露全部内置工具（shell/python/file 等有副作用，交由 _apply_web_search 按配置注入）。
+        """
         try:
             mgr = self.context.get_llm_tool_manager()
-            tools = list(mgr.func_list) + list(mgr.builtin_func_list.values())
-            return ToolSet(tools=tools)
+            return ToolSet(tools=list(mgr.func_list))
         except Exception as e:  # noqa: BLE001
             logger.warning(f"获取工具列表失败: {e}")
             return None
+
+    async def _apply_web_search(self, event, request) -> None:
+        """按 AstrBot provider 配置注入 web_search 工具（复刻主流程 _apply_web_search_tools）。
+
+        前提（用户侧配置）：
+        - provider_settings.web_search = true
+        - provider_settings.websearch_provider 指定服务商（tavily/bocha/brave/firecrawl/baidu_ai_search/exa）
+        - 对应 API key 已配置（工具执行时检查）
+        """
+        try:
+            cfg = self.context.get_config(umo=event.unified_msg_origin)
+            prov_settings = cfg.get("provider_settings", {})
+            if not prov_settings.get("web_search", False):
+                return
+            if request.func_tool is None:
+                request.func_tool = ToolSet()
+
+            from astrbot.core.tools.web_search_tools import (
+                BaiduWebSearchTool,
+                BochaWebSearchTool,
+                BraveWebSearchTool,
+                ExaGetContentsTool,
+                ExaWebSearchTool,
+                FirecrawlExtractWebPageTool,
+                FirecrawlWebSearchTool,
+                TavilyExtractWebPageTool,
+                TavilyWebSearchTool,
+            )
+            tool_mgr = self.context.get_llm_tool_manager()
+            provider = prov_settings.get("websearch_provider", "tavily")
+            if provider == "tavily":
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(TavilyWebSearchTool))
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(TavilyExtractWebPageTool))
+            elif provider == "bocha":
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(BochaWebSearchTool))
+            elif provider == "brave":
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(BraveWebSearchTool))
+            elif provider == "firecrawl":
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(FirecrawlWebSearchTool))
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(FirecrawlExtractWebPageTool))
+            elif provider == "baidu_ai_search":
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(BaiduWebSearchTool))
+            elif provider == "exa":
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(ExaWebSearchTool))
+                request.func_tool.add_tool(tool_mgr.get_builtin_tool(ExaGetContentsTool))
+        except Exception as e:  # noqa: BLE001 —— 注入失败不阻断对话
+            logger.warning(f"注入 web_search 工具失败: {e}")
 
     # ---------- 命令 ----------
 
