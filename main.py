@@ -193,10 +193,13 @@ class FairyVoice(Star):
 
     @staticmethod
     def _extract_delta_text(response) -> str:
-        """从 ToolLoopAgentRunner 的 streaming_delta 响应中提取增量文本。
+        """从 ToolLoopAgentRunner 的 streaming_delta 响应中提取**正式回复**增量文本。
 
         AgentResponse.data 是 TypedDict（运行时是 dict），chain 是 MessageChain 对象，
         其 chain 字段是 BaseMessageComponent 列表（组件有 text 属性）。
+        区分两种 streaming_delta：
+        - 思考内容（reasoning）：MessageChain(type="reasoning")，**跳过**；
+        - 正式回复：MessageChain().message(completion_text) / result_chain，提取 text。
         兼容：data 为空 / chain 缺失 / 组件无 text 的各类响应（agent_stats、tool_call 等）。
         """
         try:
@@ -205,6 +208,9 @@ class FairyVoice(Star):
                 return ""
             chain = data.get("chain") if isinstance(data, dict) else getattr(data, "chain", None)
             if chain is None:
+                return ""
+            # 跳过思考内容链（type == "reasoning"）
+            if getattr(chain, "type", None) == "reasoning":
                 return ""
             parts = chain.chain if hasattr(chain, "chain") else chain
             text = ""
