@@ -22,6 +22,20 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
+
+class _FairyCommandFilter(filter.CustomFilter):
+    """仅当**原始消息**以 `/fairy` 开头时触发状态命令。
+
+    AstrBot 的 friend_message_needs_wake_prefix 默认为 False（私聊免唤醒前缀），
+    @filter.command 会把无斜杠的 "fairy" 也识别为命令。这里改用自定义 filter，
+    从 message_obj.raw_message（未剥离前缀）判断，只有明确的 `/fairy` 才触发；
+    其余（如聊天里提到 fairy）放行给普通 LLM 对话。
+    """
+
+    def filter(self, event: AstrMessageEvent, cfg) -> bool:
+        raw = str(getattr(event.message_obj, "raw_message", "") or "").strip()
+        return raw == "/fairy" or raw.startswith("/fairy ")
+
 try:
     from astrbot.core.agent.message import (
         AssistantMessageSegment,
@@ -414,7 +428,7 @@ class FairyVoice(Star):
 
     # ---------- 命令 ----------
 
-    @filter.command("fairy")
+    @filter.custom_filter(_FairyCommandFilter)
     async def fairy(self, event: AstrMessageEvent):
         """Fairy Voice 状态查询。发送 /fairy 查看在线设备与记忆状态。"""
         if self.server is None:
